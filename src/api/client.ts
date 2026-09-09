@@ -44,8 +44,24 @@ function resolveBaseUrl(): string {
 
 export const API_BASE_URL = resolveBaseUrl();
 
-/** Requests that hang past this are treated as unreachable. */
-const TIMEOUT_MS = 15_000;
+/**
+ * True when the API is a deployed host rather than a machine on this LAN.
+ *
+ * Only used to pick the advice in the unreachable-server message: telling
+ * somebody on cellular to check `--host 0.0.0.0` sends them after a problem
+ * that is not theirs.
+ */
+const IS_REMOTE_API = /^https:\/\//i.test(API_BASE_URL);
+
+/**
+ * Requests that hang past this are treated as unreachable.
+ *
+ * 30s rather than something tighter because the field is the worst case: a
+ * phone on rural cellular, several hops from the nearest tower, is slow rather
+ * than broken. Giving up at 15s turned a working connection into a
+ * "cannot reach the server" the user could do nothing about.
+ */
+const TIMEOUT_MS = 30_000;
 
 /** Audio upload plus transcription plus an LLM call takes a good deal longer. */
 const UPLOAD_TIMEOUT_MS = 60_000;
@@ -132,7 +148,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     // Distinguish "we gave up waiting" from "the request was cancelled".
     if (signal?.aborted) throw caught;
     throw new ApiError(
-      `Cannot reach the server at ${API_BASE_URL}. Check that the backend is running with --host 0.0.0.0 and that this device is on the same network.`,
+      IS_REMOTE_API
+        ? `Cannot reach the server at ${API_BASE_URL}. Check this device's internet connection and try again.`
+        : `Cannot reach the server at ${API_BASE_URL}. Check that the backend is running with --host 0.0.0.0 and that this device is on the same network.`,
       0,
       true
     );
