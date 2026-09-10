@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field } from '@/components/ui-kit';
+import { UserManualModal } from '@/components/user-manual-modal';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { API_BASE_URL } from '@/api/client';
 import { useAuth } from '@/auth/auth-context';
@@ -24,6 +25,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
 
   async function submit() {
     setError(null);
@@ -79,6 +81,20 @@ export default function LoginScreen() {
             <Button title="Log in" onPress={submit} loading={submitting} />
           </Card>
 
+          {/* Below the form, not inside it: this is for someone deciding
+              whether the app does what they need, and it should not sit
+              between the password field and the button that uses it. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="How to use this app"
+            onPress={() => setManualOpen(true)}
+            hitSlop={8}
+            style={({ pressed }) => [styles.manualLink, pressed && { opacity: 0.6 }]}>
+            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              How to Use This App
+            </ThemedText>
+          </Pressable>
+
           <View style={styles.footer}>
             <ThemedText type="small" themeColor="textSecondary">
               New here?
@@ -99,6 +115,8 @@ export default function LoginScreen() {
           </ThemedText>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <UserManualModal visible={manualOpen} onClose={() => setManualOpen(false)} />
     </SafeAreaView>
   );
 }
@@ -125,6 +143,12 @@ const styles = StyleSheet.create({
   },
   form: {
     gap: Spacing.three,
+  },
+  manualLink: {
+    alignSelf: 'center',
+    // Negative pull against the container's gap: the link belongs to the form
+    // above it, not to the sign-up row below.
+    marginTop: -Spacing.two,
   },
   footer: {
     flexDirection: 'row',
