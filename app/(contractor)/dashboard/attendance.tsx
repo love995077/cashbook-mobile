@@ -21,11 +21,17 @@ import { TradeBadge } from '@/components/trade-badge';
 import { Avatar, Button, EmptyState, Segmented } from '@/components/ui-kit';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useStore, type WorkerWithBalance } from '@/data/store';
-import type { AttendanceStatus, BulkAttendanceMark, WorkShift } from '@/data/types';
+import type {
+  Attendance,
+  AttendanceStatus,
+  BulkAttendanceMark,
+  WorkShift,
+} from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
 import { choose, confirm, notify } from '@/lib/dialog';
 import {
   ATTENDANCE_GLYPHS,
+  ATTENDANCE_LABELS,
   CURRENCY,
   formatDate,
   formatMoney,
@@ -73,6 +79,19 @@ type Draft = {
  * leaves them alone unless `overwrite` is set, so a resubmission after a
  * dropped response changes nothing rather than rewriting the day.
  *
+ * CORRECTING A MARKED ROW
+ * ----------------------
+ * The lock stops a resubmission rewriting the day by accident. It used to stop
+ * a correction too, which left no way at all to fix somebody marked absent who
+ * was on the other block — the contractor's only option was to leave the
+ * record wrong.
+ *
+ * So a locked row's status buttons stay live and go through `editAttendance`
+ * (PATCH, one row) rather than through the draft and the bulk submit. They ask
+ * first, naming both statuses and the day: the point of the lock is that a
+ * marked day does not change without somebody meaning it, and a confirmation
+ * keeps that while a hard lock only prevented the fix.
+ *
  * THE DAY IS CHOSEN, NOT ASSUMED
  * ------------------------------
  * The grid defaults to today, which is what it is used for nearly every time.
@@ -102,6 +121,7 @@ export default function AttendanceScreen() {
     refresh,
     getAttendanceOn,
     submitBulkAttendance,
+    editAttendance,
     markRainOut,
     isOnline,
   } = useStore();
@@ -117,6 +137,8 @@ export default function AttendanceScreen() {
   const [shift, setShift] = useState<WorkShift>('day');
   const [raining, setRaining] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Worker whose already-marked row is being corrected, if any. */
+  const [correcting, setCorrecting] = useState<number | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
 
   /** worker id -> what has been entered for them, before submitting. */
@@ -233,6 +255,50 @@ export default function AttendanceScreen() {
       notify('Could not record the day', message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * Change a status that is already recorded.
+   *
+   * Confirms first, naming what it is changing from and to and which day —
+   * this is the one control on the screen that rewrites a record rather than
+   * adding one, and on a back-dated grid "which day" is the part most easily
+   * got wrong.
+   */
+  async function correct(
+    worker: WorkerWithBalance,
+    row: Attendance,
+    next: AttendanceStatus
+  ) {
+    if (row.status === next) return;
+
+    const ok = await confirm({
+      title: `Change ${worker.name.split(' ')[0]}'s day?`,
+      message:
+        `${worker.name} is marked ${ATTENDANCE_LABELS[row.status].toLowerCase()} for ` +
+        `${formatDate(date)}. Change it to ${ATTENDANCE_LABELS[next].toLowerCase()}?` +
+        '\n\nIf they are repaying an advance in daily installments, that day’s ' +
+        'deduction is adjusted to match.',
+      confirmLabel: 'Change it',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setCorrecting(worker.id);
+    setRowError(null);
+    try {
+      await editAttendance(row.id, { status: next });
+      notify(
+        'Day corrected',
+        `${worker.name} is now marked ${ATTENDANCE_LABELS[next].toLowerCase()} for ${formatDate(date)}.`
+      );
+    } catch (caught) {
+      const message = (caught as Error).message;
+      setRowError(message);
+      notify('Could not change the day', message);
+    } finally {
+      setCorrecting(null);
     }
   }
 
@@ -354,15 +420,28 @@ export default function AttendanceScreen() {
             ) : null}
           </View>
         }
-        renderItem={({ item }) => (
-          <WorkerRow
-            worker={item}
-            existing={getAttendanceOn(item.id, date)?.status}
-            backDated={isBackDated}
-            draft={drafts[item.id]}
-            onChange={(patch) => setDraft(item.id, patch)}
-          />
-        )}
+        renderItem={({ item }) => {
+          const existing = getAttendanceOn(item.id, date);
+          return (
+            <WorkerRow
+              worker={item}
+              existing={existing}
+              backDated={isBackDated}
+              draft={drafts[item.id]}
+              // A queued mark carries a local id of -1 and does not exist on
+              // the server yet, so there is nothing to PATCH. It corrects
+              // itself when the queue drains.
+              correctable={
+                existing !== undefined && existing.id > 0 && isOnline && correcting === null
+              }
+              correcting={correcting === item.id}
+              onChange={(patch) => setDraft(item.id, patch)}
+              onCorrect={(next) => {
+                if (existing) void correct(item, existing, next);
+              }}
+            />
+          );
+        }}
         ItemSeparatorComponent={() => (
           <View style={[styles.separator, { backgroundColor: theme.border }]} />
         )}
@@ -375,7 +454,8 @@ export default function AttendanceScreen() {
               {ATTENDANCE_GLYPHS.present} = present · {ATTENDANCE_GLYPHS.half_day} = half day ·{' '}
               {ATTENDANCE_GLYPHS.absent} = absent · {ATTENDANCE_GLYPHS.rain_out} = rained out.
               One entry per worker per day. Piece-rate workers are paid on quantity × rate
-              instead.
+              instead. To correct a day already marked, tap the status you want on that row
+              and confirm.
             </ThemedText>
             {draftPieceTotal > 0 ? (
               <ThemedText type="small" themeColor="textSecondary">
@@ -455,16 +535,25 @@ function WorkerRow({
   existing,
   backDated,
   draft,
+  correctable,
+  correcting,
   onChange,
+  onCorrect,
 }: {
   worker: WorkerWithBalance;
-  existing?: AttendanceStatus;
+  existing?: Attendance;
   /** Only to word the row correctly — "Marked" rather than "Marked for today". */
   backDated: boolean;
   draft?: Draft;
+  /** Whether an already-marked row may be changed right now. */
+  correctable: boolean;
+  /** This row's correction is in flight. */
+  correcting: boolean;
   onChange: (patch: Draft) => void;
+  onCorrect: (next: AttendanceStatus) => void;
 }) {
   const theme = useTheme();
+  const marked = existing?.status;
   const locked = existing !== undefined;
   const isPiece = worker.wage_type === 'piece_rate';
 
@@ -480,9 +569,15 @@ function WorkerRow({
     // now, and a custom one still has to name itself here.
     postLabel(worker.trade),
     locked
-      ? backDated
-        ? 'Already marked for this day'
-        : 'Marked for today'
+      ? correcting
+        ? 'Changing…'
+        : // Says the row can still be put right, so a contractor looking at a
+          // wrong mark does not conclude the app will not let them fix it.
+          correctable
+          ? `${backDated ? 'Marked' : 'Marked today'} · tap to change`
+          : backDated
+            ? 'Already marked for this day'
+            : 'Marked for today'
       : isPiece
         ? 'Paid by the piece'
         : 'Not marked yet',
@@ -516,9 +611,12 @@ function WorkerRow({
           <View style={styles.options}>
             {OPTIONS.map((option) => {
               const selected = locked
-                ? existing === option.value
+                ? marked === option.value
                 : draft?.status === option.value;
-              const dimmed = locked && !selected;
+              // A locked row that can be corrected keeps its unselected
+              // buttons legible — they are now the way to change the day, and
+              // a control faded to a quarter does not read as one.
+              const dimmed = locked && !selected && !correctable;
               const tint = {
                 present: theme.positive,
                 half_day: theme.warning,
@@ -526,14 +624,22 @@ function WorkerRow({
                 rain_out: theme.tint,
               }[option.value];
 
+              const disabled = locked ? !correctable || selected : false;
+
               return (
                 <Pressable
                   key={option.value}
                   accessibilityRole="button"
-                  accessibilityLabel={`Mark ${worker.name} ${option.value.replace('_', ' ')}`}
-                  accessibilityState={{ selected, disabled: locked }}
-                  disabled={locked}
-                  onPress={() => onChange({ status: option.value })}
+                  accessibilityLabel={
+                    locked
+                      ? `Change ${worker.name} to ${option.value.replace('_', ' ')}`
+                      : `Mark ${worker.name} ${option.value.replace('_', ' ')}`
+                  }
+                  accessibilityState={{ selected, disabled }}
+                  disabled={disabled}
+                  onPress={() =>
+                    locked ? onCorrect(option.value) : onChange({ status: option.value })
+                  }
                   style={({ pressed }) => [
                     styles.option,
                     {
@@ -541,6 +647,9 @@ function WorkerRow({
                       backgroundColor: selected ? `${tint}22` : 'transparent',
                       opacity: dimmed ? 0.25 : pressed ? 0.6 : 1,
                     },
+                    // Dashed while correctable, so a row that can be changed
+                    // is distinguishable from a fresh one at a glance.
+                    locked && correctable && !selected ? styles.correctable : null,
                   ]}>
                   <ThemedText
                     type="smallBold"
@@ -688,6 +797,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  correctable: {
+    borderStyle: 'dashed',
   },
   pieceBlock: {
     gap: Spacing.two,

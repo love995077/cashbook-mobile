@@ -360,6 +360,34 @@ export async function createAttendance(
 }
 
 /**
+ * Correct a day that was already marked.
+ *
+ * Only the fields sent are changed. Changing the status re-settles that day's
+ * installment server-side, so a day corrected to absent gives back the
+ * deduction it had taken.
+ *
+ * A 409 means the worker is already marked for the date the row was moved
+ * onto — the server will not merge two days into one.
+ */
+export async function updateAttendance(
+  token: string,
+  attendanceId: number,
+  changes: {
+    date?: string;
+    status?: AttendanceStatus;
+    shift?: WorkShift;
+    note?: string | null;
+  }
+): Promise<Attendance> {
+  const wire = await request<WireAttendance>(`/contractor/attendance/${attendanceId}`, {
+    method: 'PATCH',
+    token,
+    body: changes,
+  });
+  return toAttendance(wire);
+}
+
+/**
  * Take a worker off the crew.
  *
  * Deactivates by default; the row and its whole ledger survive. `purge` hard
@@ -1043,6 +1071,27 @@ export async function updateSite(
     body: { ...changes, ...(changes.name ? { name: changes.name.trim() } : {}) },
   });
   return toSite(wire);
+}
+
+/**
+ * Take a site off the list.
+ *
+ * Closes it by default — `is_active` goes false, the site drops out of the
+ * pickers, and every photo, receipt, invoice and petty-cash row it carries is
+ * kept. `purge` hard deletes, and the API refuses it the moment the site has
+ * any history, so it is only ever the undo for a site named wrong a minute
+ * ago. Workers posted there are unposted either way, never deleted.
+ */
+export async function deleteSite(
+  token: string,
+  siteId: number,
+  options: { purge?: boolean } = {}
+): Promise<void> {
+  const query = options.purge ? '?purge=true' : '';
+  await request<void>(`/contractor/sites/${siteId}${query}`, {
+    method: 'DELETE',
+    token,
+  });
 }
 
 export async function fetchSitePhotos(

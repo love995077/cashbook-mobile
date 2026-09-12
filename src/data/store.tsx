@@ -88,7 +88,9 @@ import {
   scanAttendance as scanAttendanceRequest,
   submitBulkAttendance as submitBulkAttendanceRequest,
   createSite as createSiteRequest,
+  deleteSite as deleteSiteRequest,
   deleteSitePhoto as deleteSitePhotoRequest,
+  updateAttendance as updateAttendanceRequest,
   markSiteRainedOut as markSiteRainedOutRequest,
   settlePayroll as settlePayrollRequest,
   updateCategory,
@@ -429,6 +431,25 @@ type StoreValue = {
       supervisor_id?: number | null;
     }
   ) => Promise<void>;
+
+  /**
+   * Take a site off the list. Closes it by default, keeping its history;
+   * `purge` hard deletes and the API refuses that once anything is on record.
+   */
+  removeSite: (siteId: number, options?: { purge?: boolean }) => Promise<void>;
+
+  /**
+   * Correct a day already marked. Needs a connection — see the implementation.
+   */
+  editAttendance: (
+    attendanceId: number,
+    changes: {
+      date?: string;
+      status?: AttendanceStatus;
+      shift?: WorkShift;
+      note?: string | null;
+    }
+  ) => Promise<Attendance>;
 
   /** A site's photo feed. Fetched per screen rather than held in the store. */
   getSitePhotos: (siteId: number, signal?: AbortSignal) => Promise<SitePhoto[]>;
@@ -1063,6 +1084,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [requireSession]
   );
 
+  /**
+   * Take a site off the list.
+   *
+   * Not queueable, for the same reason removing a worker is not: the list is
+   * rebuilt from the server's answer, and a queued deletion would leave a site
+   * on screen the contractor believes is gone.
+   *
+   * The full refresh rather than a local filter is deliberate — closing a site
+   * unassigns its supervisor, and purging one unposts its crew, so `workers`
+   * moves as well as `sites`.
+   */
+  const removeSite = useCallback(
+    async (siteId: number, options: { purge?: boolean } = {}) => {
+      const { token: authToken } = requireSession();
+      await deleteSiteRequest(authToken, siteId, options);
+      await load('refresh');
+    },
+    [requireSession, load]
+  );
+
+  /**
+   * Correct a day already marked.
+   *
+   * Not queueable. A correction is a statement about a row that already exists
+   * on the server, and replaying one later would land on whatever the day
+   * looks like by then — including a row somebody else has since fixed.
+   *
+   * Takes the full refresh because the grid reads attendance out of each
+   * worker's ledger, and a status change can hand back an installment, which
+   * moves their balance too.
+   */
+  const editAttendance = useCallback(
+    async (
+      attendanceId: number,
+      changes: {
+        date?: string;
+        status?: AttendanceStatus;
+        shift?: WorkShift;
+        note?: string | null;
+      }
+    ) => {
+      const { token: authToken } = requireSession();
+      const updated = await updateAttendanceRequest(authToken, attendanceId, changes);
+      await load('refresh');
+      return updated;
+    },
+    [requireSession, load]
+  );
+
   const getSitePhotos = useCallback(
     async (siteId: number, signal?: AbortSignal) => {
       const { token: authToken } = requireSession();
@@ -1652,6 +1722,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addSite,
       assignWorkerToSite,
       editSite,
+      removeSite,
+      editAttendance,
       getSitePhotos,
       addSitePhoto,
       removeSitePhoto,
@@ -1731,6 +1803,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addSite,
       assignWorkerToSite,
       editSite,
+      removeSite,
+      editAttendance,
       getSitePhotos,
       addSitePhoto,
       removeSitePhoto,
