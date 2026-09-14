@@ -11,13 +11,28 @@ import type { UserRole } from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
 
 const ROLES: { value: UserRole; label: string }[] = [
-  { value: 'contractor', label: 'Contractor' },
+  // 'admin' on the wire; 'Contractor' is the word the user recognises.
+  { value: 'admin', label: 'Contractor' },
+  { value: 'supervisor', label: 'Supervisor' },
   { value: 'worker', label: 'Worker' },
 ];
+
+const BLURB: Record<UserRole, string> = {
+  admin: 'Contractors manage a crew, every site, and all the money.',
+  supervisor:
+    'A supervisor runs one site: attendance, tools, deliveries and machinery. They never see the cash box or payroll.',
+  worker: 'Workers see their own ledger and nothing else.',
+};
 
 /**
  * Create an account. The chosen role decides which dashboard the user lands
  * on, via the same guard that handles login.
+ *
+ * A supervisor is the only role that has to say who they work for at sign-up.
+ * A contractor belongs to nobody, and a worker is normally created FOR them
+ * from the contractor's Workers screen, which fills the link in server-side.
+ * A supervisor has no such screen — they are the account a contractor then
+ * assigns to a site — so the id is asked for here.
  */
 export default function RegisterScreen() {
   const theme = useTheme();
@@ -27,7 +42,8 @@ export default function RegisterScreen() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('contractor');
+  const [role, setRole] = useState<UserRole>('admin');
+  const [contractorId, setContractorId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -39,9 +55,18 @@ export default function RegisterScreen() {
       return;
     }
 
+    let linkedTo: number | null = null;
+    if (role === 'supervisor') {
+      linkedTo = Number.parseInt(contractorId.trim(), 10);
+      if (!Number.isFinite(linkedTo) || linkedTo <= 0) {
+        setError('Enter the contractor id you were given');
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
-      await signUp({ name, phone, password, role });
+      await signUp({ name, phone, password, role, contractor_id: linkedTo });
     } catch (caught) {
       setError((caught as Error).message);
       setSubmitting(false);
@@ -57,7 +82,7 @@ export default function RegisterScreen() {
           <View style={styles.intro}>
             <ThemedText type="subtitle">Create account</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
-              Contractors manage a crew. Workers see their own ledger.
+              {BLURB[role]}
             </ThemedText>
           </View>
 
@@ -86,6 +111,18 @@ export default function RegisterScreen() {
               placeholder="9990001111"
               returnKeyType="next"
             />
+            {role === 'supervisor' ? (
+              <Field
+                label="Contractor id"
+                value={contractorId}
+                onChangeText={setContractorId}
+                keyboardType="number-pad"
+                placeholder="1"
+                hint="Ask your contractor for this. It links your account to their sites."
+                returnKeyType="next"
+              />
+            ) : null}
+
             <Field
               label="Password"
               value={password}

@@ -15,7 +15,7 @@ import {
   useAudioRecorder,
 } from 'expo-audio';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { uploadVoiceEntry, type VoiceEntryResult } from '@/api/endpoints';
@@ -23,6 +23,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAuth } from '@/auth/auth-context';
 import { useStore } from '@/data/store';
+import { notify } from '@/lib/dialog';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
@@ -67,7 +68,7 @@ export function VoiceEntryButton({ workerId }: { workerId?: number | null }) {
 
     const permission = await AudioModule.requestRecordingPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert(
+      notify(
         'Microphone needed',
         'Allow microphone access in Settings to record cashbook entries by voice.'
       );

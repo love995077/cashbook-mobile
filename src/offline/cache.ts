@@ -12,10 +12,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { WorkerLedger } from '@/api/endpoints';
-import type { BalanceSummary, User } from '@/data/types';
+import type {
+  BalanceSummary,
+  CashCategory,
+  CashEntry,
+  CashSummary,
+  User,
+} from '@/data/types';
 
 /** Bump when the cached shape changes; older payloads are then ignored. */
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 const keyFor = (userId: number) => `cashbook.cache.v${CACHE_VERSION}.user.${userId}`;
 
@@ -26,6 +32,10 @@ export type CachedDashboard = {
   workers: (User & { balance: BalanceSummary })[];
   ledgers: WorkerLedger[];
   myLedger: WorkerLedger | null;
+  /** Contractor only; a worker never sees the site cash box. */
+  summary: CashSummary | null;
+  categories: CashCategory[];
+  cashEntries: CashEntry[];
 };
 
 export async function readCache(userId: number): Promise<CachedDashboard | null> {

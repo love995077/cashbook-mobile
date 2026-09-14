@@ -6,15 +6,19 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AudioNoteButton } from '@/components/audio-note-button';
+import { PaymentModePicker } from '@/components/payment-mode-picker';
 import { ThemedText } from '@/components/themed-text';
+import { TradeBadge } from '@/components/trade-badge';
 import { Avatar, Button, Card, Field, Segmented } from '@/components/ui-kit';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useStore } from '@/data/store';
-import type { AttendanceStatus } from '@/data/types';
+import type { AttendanceStatus, PaymentMode } from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
 import { ATTENDANCE_LABELS, CURRENCY, formatDate, formatMoney, toISODate } from '@/lib/money';
 
@@ -41,7 +45,7 @@ const STATUSES: { value: AttendanceStatus; label: string }[] = [
 export default function NewEntryScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { workers, giveAdvance, markAttendance, getAttendanceOn } = useStore();
+  const { workers, giveAdvance, markAttendance, getAttendanceOn, isOnline } = useStore();
   const params = useLocalSearchParams<{ workerId?: string }>();
 
   const [workerId, setWorkerId] = useState<number | null>(() => {
@@ -51,13 +55,35 @@ export default function NewEntryScreen() {
   const [action, setAction] = useState<Action>('advance');
   const [amount, setAmount] = useState('');
   const [status, setStatus] = useState<AttendanceStatus>('present');
+  // Cash is the default because it is how most of a site is actually paid,
+  // and it is what the API assumes when nothing is sent.
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('cash');
+  // Uploaded on release, so the path is already stored by the time Save is
+  // tapped. Null until something is recorded.
+  const [audioNotePath, setAudioNotePath] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  // "Recover via daily installments". Off by default: most advances are
+  // settled against the next payout rather than clawed back day by day.
+  const [recoverDaily, setRecoverDaily] = useState(false);
+  const [dailyDeduction, setDailyDeduction] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const today = useMemo(() => toISODate(new Date()), []);
   const worker = workers.find((candidate) => candidate.id === workerId) ?? null;
   const alreadyMarked = worker ? getAttendanceOn(worker.id, today) : undefined;
+
+  // "25 working days to clear" is the question a contractor actually asks
+  // about an installment plan, so the form answers it while they type rather
+  // than making them divide two numbers on the back of a delivery note.
+  const installmentHint = useMemo(() => {
+    const total = Number.parseFloat(amount);
+    const perDay = Number.parseFloat(dailyDeduction);
+    if (!Number.isFinite(total) || !Number.isFinite(perDay) || perDay <= 0) return undefined;
+    if (perDay > total) return 'That is more than the advance itself.';
+    const days = Math.ceil(total / perDay);
+    return `Clears in ${days} working day${days === 1 ? '' : 's'}.`;
+  }, [amount, dailyDeduction]);
 
   async function submit() {
     setError(null);
@@ -70,11 +96,27 @@ export default function NewEntryScreen() {
     // Validate before the request so the obvious mistakes never leave the
     // device; the API enforces the same rule with `amount: Decimal(gt=0)`.
     let value = 0;
+    let deduction: number | null = null;
     if (action === 'advance') {
       value = Number.parseFloat(amount);
       if (!Number.isFinite(value) || value <= 0) {
         setError('Enter an amount greater than zero');
         return;
+      }
+
+      if (recoverDaily) {
+        deduction = Number.parseFloat(dailyDeduction);
+        if (!Number.isFinite(deduction) || deduction <= 0) {
+          setError('Enter how much to recover each day');
+          return;
+        }
+        if (deduction > value) {
+          // The first day would clear the whole plan, which is a lump sum
+          // with extra steps. The API refuses it too; catching it here keeps
+          // the typed form on screen.
+          setError('The daily amount cannot be more than the advance itself');
+          return;
+        }
       }
     }
 
@@ -85,7 +127,10 @@ export default function NewEntryScreen() {
           worker_id: worker.id,
           amount: value,
           date: today,
+          payment_mode: paymentMode,
+          audio_note_path: audioNotePath,
           note: note.trim() || null,
+          daily_deduction: deduction,
         });
       } else {
         await markAttendance({
@@ -153,6 +198,7 @@ export default function NewEntryScreen() {
                     <ThemedText type="small" numberOfLines={1} style={styles.workerChipName}>
                       {candidate.name.split(' ')[0]}
                     </ThemedText>
+                    <TradeBadge trade={candidate.trade} compact />
                   </Pressable>
                 );
               })}
@@ -175,21 +221,74 @@ export default function NewEntryScreen() {
             </View>
 
             {action === 'advance' ? (
-              <Field
-                label="Amount"
-                value={amount}
-                onChangeText={setAmount}
-                keyboardType="decimal-pad"
-                placeholder={`${CURRENCY}0`}
-                hint={
-                  worker?.daily_wage
-                    ? `${worker.name.split(' ')[0]}'s day rate is ${CURRENCY}${formatMoney(
-                        worker.daily_wage
-                      )}`
-                    : undefined
-                }
-                returnKeyType="done"
-              />
+              <>
+                <Field
+                  label="Amount"
+                  value={amount}
+                  onChangeText={setAmount}
+                  keyboardType="decimal-pad"
+                  placeholder={`${CURRENCY}0`}
+                  hint={
+                    worker?.daily_wage
+                      ? `${worker.name.split(' ')[0]}'s day rate is ${CURRENCY}${formatMoney(
+                          worker.daily_wage
+                        )}`
+                      : undefined
+                  }
+                  returnKeyType="done"
+                />
+                {/* Directly under the amount: how much, then how it was handed
+                    over, in the order the contractor would say it aloud. */}
+                <PaymentModePicker value={paymentMode} onChange={setPaymentMode} />
+
+                {/* And then how it comes back. Last, because it is the least
+                    common answer and the one that needs the amount above it
+                    already decided. */}
+                <View style={styles.section}>
+                  <View style={styles.switchRow}>
+                    <View style={styles.switchLabel}>
+                      <ThemedText type="smallBold">Recover via daily installments</ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Take a fixed amount off each day {worker?.name.split(' ')[0] ?? 'they'}{' '}
+                        works, instead of holding the whole advance against their next payout.
+                      </ThemedText>
+                    </View>
+                    <Switch
+                      value={recoverDaily}
+                      onValueChange={setRecoverDaily}
+                      disabled={!isOnline}
+                      accessibilityLabel="Recover this advance via daily installments"
+                      trackColor={{ true: theme.tint, false: theme.border }}
+                    />
+                  </View>
+
+                  {recoverDaily ? (
+                    <>
+                      <Field
+                        label="Deduct each day"
+                        value={dailyDeduction}
+                        onChangeText={setDailyDeduction}
+                        keyboardType="decimal-pad"
+                        placeholder={`${CURRENCY}0`}
+                        hint={installmentHint}
+                        returnKeyType="done"
+                      />
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Nothing is deducted on a day they do not work, and a half day
+                        recovers half.
+                      </ThemedText>
+                    </>
+                  ) : null}
+
+                  {!isOnline ? (
+                    <ThemedText type="small" style={{ color: theme.warning }}>
+                      Installments need a connection — the plan has to be recorded against the
+                      advance itself, and that cannot be queued. You can still save the advance
+                      without them.
+                    </ThemedText>
+                  ) : null}
+                </View>
+              </>
             ) : (
               <View style={styles.section}>
                 <ThemedText type="smallBold" themeColor="textSecondary">
@@ -213,6 +312,16 @@ export default function NewEntryScreen() {
               maxLength={255}
               returnKeyType="done"
             />
+
+            {action === 'advance' ? (
+              // Beside the note field, not instead of it: some contractors
+              // type, and on a noisy site most would rather say it.
+              <AudioNoteButton
+                value={audioNotePath}
+                onChange={setAudioNotePath}
+                label="Hold to say what it is for"
+              />
+            ) : null}
           </Card>
 
           {error ? (
@@ -281,5 +390,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  switchLabel: {
+    flex: 1,
+    gap: 2,
   },
 });

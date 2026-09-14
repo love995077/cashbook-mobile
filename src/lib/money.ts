@@ -1,4 +1,6 @@
-import type { AttendanceStatus, TransactionType } from '@/data/types';
+import type { Ionicons } from '@expo/vector-icons';
+
+import type { AttendanceStatus, PaymentMode, TransactionType } from '@/data/types';
 
 export const CURRENCY = '₹'; // Indian rupee
 
@@ -66,4 +68,49 @@ export const ATTENDANCE_LABELS: Record<AttendanceStatus, string> = {
   present: 'Present',
   half_day: 'Half day',
   absent: 'Absent',
+  rain_out: 'Rained out',
 };
+
+/** One-character marks for the dense attendance grid and the ledger gutter. */
+export const ATTENDANCE_GLYPHS: Record<AttendanceStatus, string> = {
+  present: 'P',
+  half_day: '½',
+  absent: 'A',
+  // Not "R": the umbrella reads at a glance in bright sun, which is where
+  // this button gets pressed.
+  rain_out: '☂',
+};
+
+export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
+  cash: 'Cash',
+  upi: 'UPI',
+  bank_transfer: 'Bank transfer',
+};
+
+/**
+ * The three ways money changes hands, in the order they are offered.
+ *
+ * Cash first because that is still how most of a site gets paid, and it is
+ * the default the API falls back to when nothing is chosen.
+ */
+export const PAYMENT_MODES: {
+  value: PaymentMode;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { value: 'cash', label: PAYMENT_MODE_LABELS.cash, icon: 'cash-outline' },
+  { value: 'upi', label: PAYMENT_MODE_LABELS.upi, icon: 'phone-portrait-outline' },
+  { value: 'bank_transfer', label: PAYMENT_MODE_LABELS.bank_transfer, icon: 'business-outline' },
+];
+
+/** "UPI" for a known mode, null when none was recorded (every wage, and history). */
+export function formatPaymentMode(mode: PaymentMode | null | undefined): string | null {
+  if (!mode) return null;
+  return PAYMENT_MODE_LABELS[mode] ?? null;
+}
+
+/** "6.5 days" / "1 day" — days_worked counts a half day as a half. */
+export function formatDays(days: number): string {
+  const rounded = Number.isInteger(days) ? String(days) : days.toFixed(1);
+  return `${rounded} ${days === 1 ? 'day' : 'days'}`;
+}

@@ -12,7 +12,10 @@
       "bundleIdentifier": "com.cashbook.app",
       "supportsTablet": false,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Cashbook uses the microphone so you can record wages and advances by speaking instead of typing."
+        "NSMicrophoneUsageDescription": "Cashbook uses the microphone so you can record wages and advances by speaking instead of typing.",
+        "NSFaceIDUsageDescription": "Cashbook uses Face ID to unlock your ledger so nobody else can read it if your phone is left unattended.",
+        "NSCameraUsageDescription": "Cashbook uses the camera so you can photograph the day's progress on site.",
+        "NSPhotoLibraryUsageDescription": "Cashbook uses your photos so you can attach a material receipt to the site log."
       }
     },
     "android": {
@@ -28,7 +31,9 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.CAMERA"
       ]
     },
     "web": {
@@ -48,7 +53,20 @@
       "expo-audio",
       "expo-secure-store",
       "expo-sharing",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Cashbook uses Face ID to unlock your ledger so nobody else can read it if your phone is left unattended."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cashbook uses your photos so you can attach a material receipt to the site log.",
+          "cameraPermission": "Cashbook uses the camera so you can photograph the day's progress on site."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

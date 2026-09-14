@@ -43,6 +43,16 @@ export const Colors = {
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
+/**
+ * One theme's colours, widened to `string`.
+ *
+ * `Colors` is `as const` so each hex is a literal type, which makes
+ * `Colors.light` and `Colors.dark` mutually unassignable - fine while the
+ * scheme was picked at the module boundary, a type error the moment a theme
+ * is chosen at runtime. This is the type everything downstream should use.
+ */
+export type Palette = Record<ThemeColor, string>;
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */

@@ -187,13 +187,32 @@ export function Badge({ label, color }: { label: string; color: string }) {
   );
 }
 
-export function EmptyState({ title, message }: { title: string; message: string }) {
+/**
+ * Nothing to show, and optionally the one thing to do about it.
+ *
+ * The action matters: an empty list with no way out of it makes the reader
+ * hunt the screen for the button that fills it.
+ */
+export function EmptyState({
+  title,
+  message,
+  action,
+}: {
+  title: string;
+  message: string;
+  action?: { label: string; onPress: () => void };
+}) {
   return (
     <View style={styles.empty}>
       <ThemedText type="smallBold">{title}</ThemedText>
       <ThemedText type="small" themeColor="textSecondary" style={styles.emptyMessage}>
         {message}
       </ThemedText>
+      {action ? (
+        <View style={styles.emptyAction}>
+          <Button title={action.label} onPress={action.onPress} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -258,5 +277,11 @@ const styles = StyleSheet.create({
   },
   emptyMessage: {
     textAlign: 'center',
+  },
+  emptyAction: {
+    alignSelf: 'stretch',
+    marginTop: Spacing.two,
+    maxWidth: 280,
+    width: '100%',
   },
 });

@@ -6,7 +6,7 @@
  */
 
 import { ApiError } from '@/api/client';
-import { createAttendance, createTransaction } from '@/api/endpoints';
+import { createAttendance, createCashEntry, createTransaction } from '@/api/endpoints';
 import { TRANSACTION_RETRY_IS_SAFE, type QueuedItem } from '@/offline/queue';
 
 export type FlushResult = {
@@ -37,6 +37,10 @@ export async function flushQueue(token: string, items: QueuedItem[]): Promise<Fl
     try {
       if (attempted.kind === 'attendance') {
         await createAttendance(token, attempted.payload);
+      } else if (attempted.kind === 'cash') {
+        // clientRef is the server's idempotency key here, so this call is
+        // safe to repeat however the previous attempt ended.
+        await createCashEntry(token, { ...attempted.payload, client_ref: attempted.clientRef });
       } else {
         await createTransaction(token, attempted.payload);
       }
