@@ -409,6 +409,31 @@ export async function updateAttendance(
 }
 
 /**
+ * Unmark a day that should never have been marked at all.
+ *
+ * Different from `updateAttendance`, which fixes a day that happened and was
+ * recorded wrong. This is for the day that did not happen to this worker: the
+ * wrong name tapped in the grid. Correcting that to `absent` would still leave
+ * them on the roster for a day they were never on, so the row goes instead.
+ *
+ * The date frees up afterwards - which is the point, because the worker who
+ * WAS there still has to be marked, and the unique on (worker, date) was
+ * refusing that while the wrong row stood.
+ *
+ * A 409 means the day paid piece-rate wages and the log has to be removed
+ * first; the server will not leave money paid for a day nobody worked.
+ */
+export async function deleteAttendance(
+  token: string,
+  attendanceId: number
+): Promise<void> {
+  await request<void>(`/contractor/attendance/${attendanceId}`, {
+    method: 'DELETE',
+    token,
+  });
+}
+
+/**
  * Take a worker off the crew.
  *
  * Deactivates by default; the row and its whole ledger survive. `purge` hard

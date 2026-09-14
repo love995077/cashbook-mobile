@@ -122,6 +122,7 @@ export default function AttendanceScreen() {
     getAttendanceOn,
     submitBulkAttendance,
     editAttendance,
+    removeAttendance,
     markRainOut,
     isOnline,
   } = useStore();
@@ -302,6 +303,53 @@ export default function AttendanceScreen() {
     }
   }
 
+  /**
+   * Take the mark off entirely.
+   *
+   * `correct` covers a day that happened and was recorded wrong. This is the
+   * other mistake: the wrong name tapped, so the day did not happen to this
+   * worker at all. Correcting them to absent would be a different untruth —
+   * absent is a statement about somebody who was expected — and it would leave
+   * the date occupied, so the worker who WAS there still could not be marked.
+   *
+   * Worded as "remove the mark" rather than "delete", because what the
+   * contractor is undoing is a tap, not a record they meant to keep. The
+   * confirmation names the worker and the day for the same reason `correct`
+   * does: on a back-dated grid, which day is the part most easily got wrong.
+   */
+  async function unmark(worker: WorkerWithBalance, row: Attendance) {
+    const ok = await confirm({
+      title: `Remove ${worker.name.split(' ')[0]}'s mark?`,
+      message:
+        `${worker.name} is marked ${ATTENDANCE_LABELS[row.status].toLowerCase()} for ` +
+        `${formatDate(date)}. Remove that mark completely?` +
+        '\n\nThe day goes back to unmarked, so it can be entered again — for ' +
+        'this worker or for whoever was actually there.' +
+        '\n\nIf they are repaying an advance, that day’s deduction is given back.',
+      confirmLabel: 'Remove the mark',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setCorrecting(worker.id);
+    setRowError(null);
+    try {
+      await removeAttendance(row.id);
+      notify(
+        'Mark removed',
+        `${worker.name} is no longer marked for ${formatDate(date)}.`
+      );
+    } catch (caught) {
+      // A 409 here is the server refusing to unpay piece-rate work, and its
+      // message names what to remove first, so it is shown as it stands.
+      const message = (caught as Error).message;
+      setRowError(message);
+      notify('Could not remove the mark', message);
+    } finally {
+      setCorrecting(null);
+    }
+  }
+
   async function runRainOut(siteId: number, siteName: string) {
     setRaining(true);
     setRowError(null);
@@ -439,6 +487,9 @@ export default function AttendanceScreen() {
               onCorrect={(next) => {
                 if (existing) void correct(item, existing, next);
               }}
+              onUnmark={() => {
+                if (existing) void unmark(item, existing);
+              }}
             />
           );
         }}
@@ -539,6 +590,7 @@ function WorkerRow({
   correcting,
   onChange,
   onCorrect,
+  onUnmark,
 }: {
   worker: WorkerWithBalance;
   existing?: Attendance;
@@ -551,6 +603,8 @@ function WorkerRow({
   correcting: boolean;
   onChange: (patch: Draft) => void;
   onCorrect: (next: AttendanceStatus) => void;
+  /** Take the mark off the day entirely, rather than changing it. */
+  onUnmark: () => void;
 }) {
   const theme = useTheme();
   const marked = existing?.status;
@@ -710,6 +764,27 @@ function WorkerRow({
           />
         </View>
       ) : null}
+
+      {/* Only on a row that is already marked and reachable. A fresh row has
+          nothing to remove, and an offline or queued one has no server row to
+          remove it from — the same condition the status buttons use.
+
+          Kept quiet and text-only, below the controls: removing the mark is
+          the rarer of the two fixes and the more destructive, so it should be
+          findable without sitting at the same weight as changing the status. */}
+      {locked && correctable ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Remove ${worker.name}'s mark for this day`}
+          accessibilityHint="Sets the day back to unmarked so it can be entered again"
+          onPress={onUnmark}
+          hitSlop={8}
+          style={({ pressed }) => [styles.unmark, { opacity: pressed ? 0.6 : 1 }]}>
+          <ThemedText type="small" style={{ color: theme.negative }}>
+            Remove this mark
+          </ThemedText>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -800,6 +875,13 @@ const styles = StyleSheet.create({
   },
   correctable: {
     borderStyle: 'dashed',
+  },
+  unmark: {
+    // Lines up under the name rather than the avatar, so it reads as
+    // belonging to this worker's row and not to the list.
+    paddingLeft: 40 + Spacing.three,
+    paddingTop: Spacing.one,
+    alignSelf: 'flex-start',
   },
   pieceBlock: {
     gap: Spacing.two,

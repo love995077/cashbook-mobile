@@ -91,6 +91,7 @@ import {
   createSite as createSiteRequest,
   deleteSite as deleteSiteRequest,
   deleteSitePhoto as deleteSitePhotoRequest,
+  deleteAttendance as deleteAttendanceRequest,
   updateAttendance as updateAttendanceRequest,
   markSiteRainedOut as markSiteRainedOutRequest,
   settlePayroll as settlePayrollRequest,
@@ -454,6 +455,12 @@ type StoreValue = {
       note?: string | null;
     }
   ) => Promise<Attendance>;
+
+  /**
+   * Unmark a day that should not have been marked at all. Needs a connection,
+   * for the same reason `editAttendance` does.
+   */
+  removeAttendance: (attendanceId: number) => Promise<void>;
 
   /** A site's photo feed. Fetched per screen rather than held in the store. */
   getSitePhotos: (siteId: number, signal?: AbortSignal) => Promise<SitePhoto[]>;
@@ -1162,6 +1169,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [requireSession, load]
   );
 
+  /**
+   * Unmark a day entirely.
+   *
+   * Not queueable, for the same reason a correction is not: it is a statement
+   * about a row that already exists on the server, and replaying it later
+   * would land on whatever the day looks like by then.
+   *
+   * Takes the full refresh rather than filtering locally — removing a day can
+   * hand back a deduction instalment, which moves the worker's balance, and
+   * the grid reads attendance out of each worker's ledger.
+   */
+  const removeAttendance = useCallback(
+    async (attendanceId: number) => {
+      const { token: authToken } = requireSession();
+      await deleteAttendanceRequest(authToken, attendanceId);
+      await load('refresh');
+    },
+    [requireSession, load]
+  );
+
   const getSitePhotos = useCallback(
     async (siteId: number, signal?: AbortSignal) => {
       const { token: authToken } = requireSession();
@@ -1754,6 +1781,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       editSite,
       removeSite,
       editAttendance,
+      removeAttendance,
       getSitePhotos,
       addSitePhoto,
       removeSitePhoto,
@@ -1836,6 +1864,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       editSite,
       removeSite,
       editAttendance,
+      removeAttendance,
       getSitePhotos,
       addSitePhoto,
       removeSitePhoto,

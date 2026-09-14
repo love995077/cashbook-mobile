@@ -166,12 +166,14 @@ export default function SiteDetailScreen() {
 
     const ok = await confirm({
       title: `Delete ${site.name}?`,
+      // See the same confirmation on the sites list for why the crew is
+      // described per outcome rather than once: only a purge unposts them.
       message:
-        'If nothing has been recorded against this site it is deleted outright. ' +
+        'If nothing has been recorded against this site it is deleted outright and ' +
+        `${crew.length === 0 ? 'no workers are affected' : `the ${crew.length} worker${crew.length === 1 ? '' : 's'} posted here go back to unposted`}. ` +
         'If it has photos, petty cash, stock, plant or invoices on it, those are kept ' +
-        'and the site is closed instead — it leaves your list either way. ' +
-        `${crew.length === 0 ? 'No workers are' : `The ${crew.length} worker${crew.length === 1 ? '' : 's'} posted here are`} ` +
-        'unposted, never deleted.',
+        'and the site is closed instead, with its crew still recorded against it — ' +
+        'it leaves your list either way. Workers are never deleted.',
       confirmLabel: 'Delete site',
       destructive: true,
     });

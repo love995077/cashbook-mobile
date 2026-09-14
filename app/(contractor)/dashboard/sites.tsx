@@ -62,11 +62,18 @@ export default function SitesScreen() {
   async function confirmDelete(siteId: number, siteName: string) {
     const ok = await confirm({
       title: `Delete ${siteName}?`,
+      // The two outcomes differ in what happens to the crew, so the wording
+      // has to as well: a purge unposts them (users.site_id is SET NULL), a
+      // close deliberately leaves them posted, because who was on the job is
+      // part of what the closed site still records. Saying "unposted" for
+      // both promised something the close path does not do — and closing is
+      // the path any site that has actually been used takes.
       message:
-        'If nothing has been recorded against this site it is deleted outright. ' +
-        'If it has photos, petty cash, stock, plant or invoices on it, those are kept and ' +
-        'the site is closed instead — it leaves your list either way. Workers posted ' +
-        'there are unposted, never deleted.',
+        'If nothing has been recorded against this site it is deleted outright and ' +
+        'the workers posted here go back to unposted. If it has photos, petty cash, ' +
+        'stock, plant or invoices on it, those are kept and the site is closed instead, ' +
+        'with its crew still recorded against it — it leaves your list either way. ' +
+        'Workers are never deleted.',
       confirmLabel: 'Delete site',
       destructive: true,
     });
