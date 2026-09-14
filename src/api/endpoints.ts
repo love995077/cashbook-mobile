@@ -341,6 +341,27 @@ export async function createTransaction(
   return toTransaction(wire);
 }
 
+/**
+ * Undo a mistyped ledger entry.
+ *
+ * Never queued for offline replay, for the same reason as `logTransaction`:
+ * without an idempotency key a retried delete can only be told apart from a
+ * fresh one by the 404 it gets back, and the caller wants to know about that.
+ *
+ * Rejects with a 409 when other rows were built on the entry — an installment
+ * plan, an approved advance request, or a piece-rate log. The message names
+ * what to unwind first, so surface it rather than swallowing it.
+ */
+export async function deleteTransaction(
+  token: string,
+  transactionId: number
+): Promise<void> {
+  await request<void>(`/contractor/transactions/${transactionId}`, {
+    method: 'DELETE',
+    token,
+  });
+}
+
 export async function createAttendance(
   token: string,
   input: {

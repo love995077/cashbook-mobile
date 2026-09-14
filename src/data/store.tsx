@@ -51,6 +51,7 @@ import {
   deleteMachineryLog,
   deletePettyCash,
   deleteTool,
+  deleteTransaction as deleteTransactionRequest,
   deleteWorker as deleteWorkerRequest,
   decideAdvanceRequest as decideAdvanceRequestRequest,
   disputeAttendance as disputeAttendanceRequest,
@@ -225,6 +226,9 @@ type StoreValue = {
 
   /** Take a worker off the crew. Deactivates; the ledger survives. */
   removeWorker: (workerId: number, options?: { purge?: boolean }) => Promise<void>;
+
+  /** Undo a mistyped wage, advance or payment. Needs a connection. */
+  deleteTransaction: (transactionId: number) => Promise<void>;
 
   // Advance requests. The contractor's queue and the worker's own list.
   getAdvanceRequests: (
@@ -924,6 +928,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (workerId: number, options: { purge?: boolean } = {}) => {
       const { token: authToken } = requireSession();
       await deleteWorkerRequest(authToken, workerId, options);
+      await load('refresh');
+    },
+    [requireSession, load]
+  );
+
+  /**
+   * Undo a mistyped ledger entry.
+   *
+   * REFETCHES RATHER THAN PATCHING THE ROW OUT
+   * ------------------------------------------
+   * Dropping the entry from local state would clear the list instantly and
+   * leave every derived figure stale: the worker's balance, the crew's
+   * outstanding total and the cash summary on Home are all computed
+   * server-side, and an advance removed here moves all three. `load('refresh')`
+   * is one round trip that brings back a consistent set, which is worth more
+   * than the frame it costs.
+   *
+   * Never queued offline, for the reason `TRANSACTION_RETRY_IS_SAFE` is false:
+   * a transaction has no idempotency key, so a replayed delete cannot be told
+   * apart from a fresh one. Failing loudly while offline is the honest answer.
+   */
+  const deleteTransaction = useCallback(
+    async (transactionId: number) => {
+      const { token: authToken } = requireSession();
+      await deleteTransactionRequest(authToken, transactionId);
       await load('refresh');
     },
     [requireSession, load]
@@ -1711,6 +1740,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addWorker,
       scanAttendance,
       removeWorker,
+      deleteTransaction,
       getAdvanceRequests,
       getMyAdvanceRequests,
       getMyProfile,
@@ -1792,6 +1822,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addWorker,
       scanAttendance,
       removeWorker,
+      deleteTransaction,
       getAdvanceRequests,
       getMyAdvanceRequests,
       getMyProfile,

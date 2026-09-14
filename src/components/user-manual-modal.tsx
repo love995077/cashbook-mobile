@@ -71,6 +71,19 @@ const SECTIONS: Section[] = [
       'Someone already marked for a day is shown locked, so sending the day twice cannot pay them twice.',
     ],
   },
+  {
+    icon: 'backspace-outline',
+    title: 'Fixing a mistyped entry',
+    body:
+      'A wrong amount typed against a worker stays in your totals until it is taken out — taking the worker off your crew does not remove it, because money you really did hand over has to keep counting. So the entry itself is what you delete.',
+    points: [
+      'Open the worker, find the entry under HISTORY, and press and hold it.',
+      'You are asked to confirm, and the question names the amount and the day so you can check it is the right one before it goes.',
+      'The balance and the totals on your home screen update straight away.',
+      'Delete only a mistake. If the money did change hands, leave it — the entry is your record of paying it.',
+      'An advance you set up installments against will not delete until the installment plan is cancelled, so a plan can never be left collecting against nothing.',
+    ],
+  },
 ];
 
 export function UserManualModal({
