@@ -108,7 +108,7 @@ function extractDetail(body: unknown, fallback: string): string {
 }
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** Plain objects are sent as JSON; a FormData is sent as multipart. */
   body?: unknown;
   /** Bearer token; omitted for /auth/login and /auth/register. */

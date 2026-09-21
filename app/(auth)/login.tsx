@@ -45,7 +45,7 @@ export default function LoginScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.intro}>
-            <ThemedText type="subtitle">Cashbook</ThemedText>
+            <ThemedText type="subtitle">MoneyMate</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
               Attendance and wages, in one place.
             </ThemedText>

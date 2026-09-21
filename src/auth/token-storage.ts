@@ -17,6 +17,12 @@ import { Platform } from 'react-native';
 
 import type { User } from '@/data/types';
 
+// NOTE the `cashbook.` prefix survives the rename to MoneyMate on purpose.
+// These are storage keys, not copy: renaming them orphans the token and
+// profile already on every existing install, which signs everybody out on
+// upgrade and loses their cached dashboard. The prefix is invisible to users
+// and the cost of changing it is not. Same reasoning in offline/cache.ts,
+// use-analytics.ts, app-lock.tsx and i18n/language-context.tsx.
 const TOKEN_KEY = 'cashbook.access_token';
 const PROFILE_KEY = 'cashbook.profile';
 

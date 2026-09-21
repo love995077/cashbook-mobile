@@ -11,13 +11,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DatePicker } from '@/components/date-picker';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Segmented } from '@/components/ui-kit';
-import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useStore } from '@/data/store';
 import type { CashDirection } from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
-import { CURRENCY, formatDate, toISODate } from '@/lib/money';
+import { CURRENCY, toISODate } from '@/lib/money';
 
 const DIRECTIONS: { value: CashDirection; label: string }[] = [
   { value: 'out', label: 'Money spent' },
@@ -54,7 +55,15 @@ export default function NewExpenseScreen() {
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
-  const [daysAgo, setDaysAgo] = useState(0);
+  /**
+   * The day the money moved, as YYYY-MM-DD.
+   *
+   * Was an offset of 0, 1 or 2 days with three chips to pick it. A receipt
+   * found in a jacket a fortnight later had nowhere to go: the API has always
+   * accepted any date (`CashEntryCreate.date` has no floor), so the form was
+   * the only thing refusing.
+   */
+  const [date, setDate] = useState(() => toISODate(new Date()));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,11 +72,6 @@ export default function NewExpenseScreen() {
     [categories, direction]
   );
 
-  const date = useMemo(() => {
-    const day = new Date();
-    day.setDate(day.getDate() - daysAgo);
-    return toISODate(day);
-  }, [daysAgo]);
 
   // A category from the other side of the ledger must not stay selected when
   // the direction flips.
@@ -209,38 +213,9 @@ export default function NewExpenseScreen() {
           </View>
 
           <Card style={styles.form}>
-            <View style={styles.dateRow}>
-              <ThemedText type="small" themeColor="textSecondary">
-                Date
-              </ThemedText>
-              <View style={styles.dateChoices}>
-                {[0, 1, 2].map((offset) => {
-                  const isSelected = offset === daysAgo;
-                  return (
-                    <Pressable
-                      key={offset}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: isSelected }}
-                      onPress={() => setDaysAgo(offset)}
-                      style={[
-                        styles.dateChip,
-                        {
-                          backgroundColor: isSelected
-                            ? theme.backgroundSelected
-                            : 'transparent',
-                        },
-                      ]}>
-                      <ThemedText type="small" themeColor={isSelected ? 'text' : 'textSecondary'}>
-                        {offset === 0 ? 'Today' : offset === 1 ? 'Yesterday' : '2 days ago'}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-            <ThemedText type="small" themeColor="textSecondary">
-              {formatDate(date)}
-            </ThemedText>
+            {/* The same picker the attendance grid uses, so "which day" is
+                one control everywhere and the future stays unselectable. */}
+            <DatePicker value={date} onChange={setDate} label="Date" />
 
             <Field
               label="Amount"
@@ -339,14 +314,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
-  },
-  dateChoices: {
-    flexDirection: 'row',
-    gap: Spacing.one,
-  },
-  dateChip: {
-    paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.two,
-    borderRadius: Radius.small,
   },
 });

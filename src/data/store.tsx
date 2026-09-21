@@ -75,7 +75,6 @@ import {
   fetchPettyCashTotals,
   fetchPieceRateLogs,
   fetchSiteInventory,
-  fetchSitePhotos,
   fetchSites,
   fetchSupervisors,
   fetchSummary,
@@ -90,7 +89,6 @@ import {
   submitBulkAttendance as submitBulkAttendanceRequest,
   createSite as createSiteRequest,
   deleteSite as deleteSiteRequest,
-  deleteSitePhoto as deleteSitePhotoRequest,
   deleteAttendance as deleteAttendanceRequest,
   updateAttendance as updateAttendanceRequest,
   markSiteRainedOut as markSiteRainedOutRequest,
@@ -98,9 +96,8 @@ import {
   updateCategory,
   updateDeduction as updateDeductionRequest,
   updateSite as updateSiteRequest,
+  replaceWorker as replaceWorkerRequest,
   updateWorker as updateWorkerRequest,
-  uploadMySitePhoto as uploadMySitePhotoRequest,
-  uploadSitePhoto as uploadSitePhotoRequest,
   type WorkerLedger,
   type WorkerProfile,
 } from '@/api/endpoints';
@@ -241,11 +238,6 @@ type StoreValue = {
   getMyProfile: (signal?: AbortSignal) => Promise<WorkerProfile>;
   /** The photo feed for the site this worker is posted to. */
   getMySitePhotos: (signal?: AbortSignal) => Promise<SitePhoto[]>;
-  /** Post a snap to their own site. The server decides which site that is. */
-  addMySitePhoto: (
-    photo: { uri: string; name?: string; mimeType?: string },
-    fields?: { date?: string; description?: string | null }
-  ) => Promise<SitePhoto>;
   requestAdvance: (input: {
     amount: number;
     reason?: string | null;
@@ -462,14 +454,30 @@ type StoreValue = {
    */
   removeAttendance: (attendanceId: number) => Promise<void>;
 
-  /** A site's photo feed. Fetched per screen rather than held in the store. */
-  getSitePhotos: (siteId: number, signal?: AbortSignal) => Promise<SitePhoto[]>;
-  addSitePhoto: (
-    siteId: number,
-    photo: { uri: string; name?: string; mimeType?: string },
-    fields?: { date?: string; description?: string | null }
-  ) => Promise<SitePhoto>;
-  removeSitePhoto: (siteId: number, photoId: number) => Promise<void>;
+  /** Save a worker's edit form. Full replacement - see the implementation. */
+  editWorker: (
+    workerId: number,
+    details: {
+      name: string;
+      daily_wage?: number | null;
+      trade?: WorkerTrade | null;
+      wage_type?: WageType;
+      site_id?: number | null;
+      is_active?: boolean;
+    }
+  ) => Promise<User>;
+
+  /**
+   * NOTE there is no photo upload in this store any more.
+   *
+   * Site photos are kept on the device that took them and never sent - see
+   * src/offline/local-photos.ts. The worker-facing snap button was removed
+   * rather than converted, because a photo a worker takes for their
+   * contractor is worthless if only the worker can see it.
+   *
+   * `getMySitePhotos` survives: the worker's feed still renders rows
+   * uploaded before the change.
+   */
 
   /** Mark a whole site rained out for the day. Needs a connection. */
   markRainOut: (siteId: number, options?: { date?: string }) => Promise<RainOutResult>;
@@ -999,19 +1007,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [requireSession]
   );
 
-  const addMySitePhoto = useCallback(
-    async (
-      photo: { uri: string; name?: string; mimeType?: string },
-      fields: { date?: string; description?: string | null } = {}
-    ) => {
-      const { token: authToken } = requireSession();
-      // Not queueable: the bytes live in a cache directory the OS is free to
-      // clear, so a photo held for later may not exist by the time it drains.
-      return uploadMySitePhotoRequest(authToken, photo, fields);
-    },
-    [requireSession]
-  );
-
   const requestAdvance = useCallback(
     async (input: {
       amount: number;
@@ -1102,6 +1097,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [requireSession, load]
   );
 
+  /**
+   * Save a worker's edit form.
+   *
+   * Full replacement (PUT), so a cleared field is cleared rather than left
+   * alone - see `replaceWorker`. Takes the full refresh because a renamed or
+   * re-rated worker appears on the crew list, the attendance grid, every
+   * site's worker_count and the payroll screens.
+   *
+   * Not queueable. It is a statement about a record that already exists, and
+   * replaying it later would overwrite whatever it looks like by then -
+   * the same reason `editAttendance` is not queued.
+   */
+  const editWorker = useCallback(
+    async (
+      workerId: number,
+      details: {
+        name: string;
+        daily_wage?: number | null;
+        trade?: WorkerTrade | null;
+        wage_type?: WageType;
+        site_id?: number | null;
+        is_active?: boolean;
+      }
+    ) => {
+      const { token: authToken } = requireSession();
+      const saved = await replaceWorkerRequest(authToken, workerId, details);
+      await load('refresh');
+      return saved;
+    },
+    [requireSession, load]
+  );
+
   const editSite = useCallback(
     async (
       siteId: number,
@@ -1187,49 +1214,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       await load('refresh');
     },
     [requireSession, load]
-  );
-
-  const getSitePhotos = useCallback(
-    async (siteId: number, signal?: AbortSignal) => {
-      const { token: authToken } = requireSession();
-      return fetchSitePhotos(authToken, siteId, {}, signal);
-    },
-    [requireSession]
-  );
-
-  const addSitePhoto = useCallback(
-    async (
-      siteId: number,
-      photo: { uri: string; name?: string; mimeType?: string },
-      fields: { date?: string; description?: string | null } = {}
-    ) => {
-      const { token: authToken } = requireSession();
-      const created = await uploadSitePhotoRequest(authToken, siteId, photo, fields);
-      // Only the photo_count moves, so this refreshes the site list rather
-      // than the whole dashboard.
-      setSites((current) =>
-        current.map((site) =>
-          site.id === siteId ? { ...site, photo_count: site.photo_count + 1 } : site
-        )
-      );
-      return created;
-    },
-    [requireSession]
-  );
-
-  const removeSitePhoto = useCallback(
-    async (siteId: number, photoId: number) => {
-      const { token: authToken } = requireSession();
-      await deleteSitePhotoRequest(authToken, siteId, photoId);
-      setSites((current) =>
-        current.map((site) =>
-          site.id === siteId
-            ? { ...site, photo_count: Math.max(site.photo_count - 1, 0) }
-            : site
-        )
-      );
-    },
-    [requireSession]
   );
 
   /**
@@ -1772,7 +1756,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       getMyAdvanceRequests,
       getMyProfile,
       getMySitePhotos,
-      addMySitePhoto,
       requestAdvance,
       decideAdvanceRequest,
       disputeAttendance,
@@ -1782,9 +1765,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeSite,
       editAttendance,
       removeAttendance,
-      getSitePhotos,
-      addSitePhoto,
-      removeSitePhoto,
+      editWorker,
       markRainOut,
       previewPayroll,
       settlePayroll,
@@ -1855,7 +1836,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       getMyAdvanceRequests,
       getMyProfile,
       getMySitePhotos,
-      addMySitePhoto,
       requestAdvance,
       decideAdvanceRequest,
       disputeAttendance,
@@ -1865,9 +1845,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeSite,
       editAttendance,
       removeAttendance,
-      getSitePhotos,
-      addSitePhoto,
-      removeSitePhoto,
+      editWorker,
       markRainOut,
       previewPayroll,
       settlePayroll,

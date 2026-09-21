@@ -146,7 +146,7 @@ export default function ReportsScreen() {
         token: token ?? '',
         path: report.path,
         params: { start_date: window.start, end_date: window.end },
-        filename: reportFilename(user?.name ?? 'cashbook', report.slug, report.format),
+        filename: reportFilename(user?.name ?? 'moneymate', report.slug, report.format),
         format: report.format,
         title: report.title,
       });
@@ -179,7 +179,7 @@ export default function ReportsScreen() {
         token: token ?? '',
         path: '/api/reports/monthly-report',
         params: { month },
-        filename: reportFilename(user?.name ?? 'cashbook', `accounts-${month}`, 'csv'),
+        filename: reportFilename(user?.name ?? 'moneymate', `accounts-${month}`, 'csv'),
         format: 'csv',
         title: `Accounts for ${monthLabel}`,
       });

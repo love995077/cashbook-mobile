@@ -3,14 +3,19 @@ import { Image } from 'expo-image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { API_BASE_URL } from '@/api/client';
+import { useAuth } from '@/auth/auth-context';
 import { ThemedText } from '@/components/themed-text';
 import { Button, EmptyState, Field } from '@/components/ui-kit';
 import { Radius, Spacing } from '@/constants/theme';
-import { useStore } from '@/data/store';
-import type { SitePhoto } from '@/data/types';
+import {
+  deleteLocalPhoto,
+  listLocalPhotos,
+  saveLocalPhoto,
+  type LocalPhoto,
+} from '@/offline/local-photos';
 import { useTheme } from '@/hooks/use-theme';
 import { confirm, notify } from '@/lib/dialog';
+import { DatePicker } from '@/components/date-picker';
 import { formatRelativeDate, toISODate } from '@/lib/money';
 
 /**
@@ -36,21 +41,25 @@ type Pending = { uri: string; mimeType?: string; name?: string };
 
 export function SiteGallery({ siteId }: { siteId: number }) {
   const theme = useTheme();
-  const { getSitePhotos, addSitePhoto, removeSitePhoto, isOnline } = useStore();
+  const { user } = useAuth();
+  const userId = user?.id ?? 0;
 
-  const [photos, setPhotos] = useState<SitePhoto[]>([]);
+  const [photos, setPhotos] = useState<LocalPhoto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [caption, setCaption] = useState('');
   const [uploading, setUploading] = useState(false);
+  // The day the photo is ABOUT. Defaults to today; a slab poured yesterday
+  // and photographed this morning belongs under yesterday.
+  const [shotOn, setShotOn] = useState(() => toISODate(new Date()));
 
   const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(
     async (controller: AbortController) => {
       try {
-        const next = await getSitePhotos(siteId, controller.signal);
+        const next = await listLocalPhotos(userId, siteId);
         if (!controller.signal.aborted) setPhotos(next);
       } catch (caught) {
         if (!controller.signal.aborted) setError((caught as Error).message);
@@ -58,7 +67,7 @@ export function SiteGallery({ siteId }: { siteId: number }) {
         if (!controller.signal.aborted) setLoading(false);
       }
     },
-    [siteId, getSitePhotos]
+    [siteId, userId]
   );
 
   useEffect(() => {
@@ -108,14 +117,17 @@ export function SiteGallery({ siteId }: { siteId: number }) {
     });
   }
 
-  async function upload() {
+  async function save() {
     if (!pending) return;
     setUploading(true);
     setError(null);
     try {
-      const created = await addSitePhoto(siteId, pending, {
-        date: toISODate(new Date()),
+      const created = await saveLocalPhoto(userId, {
+        siteId,
+        uri: pending.uri,
+        date: shotOn,
         description: caption.trim() || null,
+        mimeType: pending.mimeType,
       });
       setPhotos((current) => [created, ...current]);
       setPending(null);
@@ -127,12 +139,14 @@ export function SiteGallery({ siteId }: { siteId: number }) {
     }
   }
 
-  async function confirmRemove(photo: SitePhoto) {
+  async function confirmRemove(photo: LocalPhoto) {
     const ok = await confirm({
       title: 'Delete photo?',
-      message: photo.description
-        ? `"${photo.description}" will be removed from the site log.`
-        : 'This photo will be removed from the site log.',
+      message:
+        (photo.description
+          ? `"${photo.description}" will be removed from the site log.`
+          : 'This photo will be removed from the site log.') +
+        '\n\nIt is only on this device, so there is no copy to restore.',
       confirmLabel: 'Delete',
       cancelLabel: 'Keep',
       destructive: true,
@@ -140,7 +154,7 @@ export function SiteGallery({ siteId }: { siteId: number }) {
     if (!ok) return;
 
     try {
-      await removeSitePhoto(siteId, photo.id);
+      await deleteLocalPhoto(userId, photo.id);
       setPhotos((current) => current.filter((row) => row.id !== photo.id));
     } catch (caught) {
       const message = (caught as Error).message;
@@ -149,8 +163,8 @@ export function SiteGallery({ siteId }: { siteId: number }) {
     }
   }
 
-  // Newest day first; the API already sorts, this only groups.
-  const days = photos.reduce<{ date: string; items: SitePhoto[] }[]>((groups, photo) => {
+  // Newest day first; `listLocalPhotos` sorts, this only groups.
+  const days = photos.reduce<{ date: string; items: LocalPhoto[] }[]>((groups, photo) => {
     const last = groups[groups.length - 1];
     if (last && last.date === photo.date) last.items.push(photo);
     else groups.push({ date: photo.date, items: [photo] });
@@ -179,7 +193,8 @@ export function SiteGallery({ siteId }: { siteId: number }) {
             maxLength={255}
             returnKeyType="done"
           />
-          <Button title="Upload photo" onPress={() => void upload()} loading={uploading} />
+          <DatePicker value={shotOn} onChange={setShotOn} label="Day this shows" />
+          <Button title="Save photo" onPress={() => void save()} loading={uploading} />
           <Button
             title="Discard"
             variant="ghost"
@@ -193,25 +208,24 @@ export function SiteGallery({ siteId }: { siteId: number }) {
       ) : (
         <View style={styles.actions}>
           <View style={styles.action}>
-            <Button title="📷 Take Photo" onPress={() => void pick('camera')} disabled={!isOnline} />
+            <Button title="📷 Take Photo" onPress={() => void pick('camera')} />
           </View>
           <View style={styles.action}>
             <Button
               title="🖼 Choose from Gallery"
               variant="secondary"
               onPress={() => void pick('library')}
-              disabled={!isOnline}
             />
           </View>
         </View>
       )}
 
-      {!isOnline ? (
-        <ThemedText type="small" style={{ color: theme.warning }}>
-          You are offline. Photos are not queued for later — they need a
-          connection.
-        </ThemedText>
-      ) : null}
+      {/* Said once, near the controls, rather than buried in a help screen:
+          these photos exist on this phone only. */}
+      <ThemedText type="small" themeColor="textSecondary">
+        Photos are saved on this device only. They are not uploaded, so nobody
+        else can see them and they go when the app is uninstalled.
+      </ThemedText>
 
       {error ? (
         <ThemedText type="small" style={{ color: theme.negative }}>
@@ -241,7 +255,7 @@ export function SiteGallery({ siteId }: { siteId: number }) {
                     onLongPress={() => void confirmRemove(photo)}
                     style={({ pressed }) => [styles.tile, pressed && { opacity: 0.7 }]}>
                     <Image
-                      source={{ uri: absolute(photo.url) }}
+                      source={{ uri: photo.uri }}
                       style={styles.thumb}
                       contentFit="cover"
                       transition={150}
@@ -266,11 +280,6 @@ export function SiteGallery({ siteId }: { siteId: number }) {
       ) : null}
     </View>
   );
-}
-
-/** The API returns app-relative media paths so links survive a host change. */
-function absolute(url: string): string {
-  return url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
 }
 
 const styles = StyleSheet.create({

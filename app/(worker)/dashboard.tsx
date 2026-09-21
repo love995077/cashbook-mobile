@@ -12,7 +12,6 @@ import { ErrorState, LoadingState } from '@/components/load-state';
 import { MySiteCard } from '@/components/my-site-card';
 import { RequestAdvanceModal } from '@/components/request-advance-modal';
 import { ScreenHeader } from '@/components/screen-header';
-import { SiteSnapButton } from '@/components/site-snap-button';
 import { StatementButton } from '@/components/statement-button';
 import { SyncBanner } from '@/components/sync-banner';
 import { ThemedText } from '@/components/themed-text';
@@ -182,13 +181,6 @@ export default function WorkerDashboardScreen() {
 
             <View style={styles.cardWrap}>
               <MySiteCard site={profile?.site ?? null} />
-            </View>
-
-            <View style={styles.cardWrap}>
-              <SiteSnapButton
-                hasSite={!!profile?.site}
-                onUploaded={() => void loadSide()}
-              />
             </View>
 
             <View style={styles.cardWrap}>

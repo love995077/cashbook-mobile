@@ -56,7 +56,7 @@ export default function ScanScreen() {
       // The QR carries the bare worker id and nothing else.
       const workerId = Number.parseInt(data.trim(), 10);
       if (!Number.isFinite(workerId) || workerId <= 0) {
-        setError('That is not a Cashbook worker code.');
+        setError('That is not a MoneyMate worker code.');
         lastRef.current = { value: data, at: now };
         return;
       }
@@ -109,7 +109,7 @@ export default function ScanScreen() {
           // rendering a dead black rectangle.
           <EmptyState
             title="Scanning needs the mobile app"
-            message="Open Cashbook on your phone to scan worker IDs. Everything else on this screen works here."
+            message="Open MoneyMate on your phone to scan worker IDs. Everything else on this screen works here."
           />
         ) : (
           <View style={[styles.viewfinder, { borderColor: theme.border }]}>

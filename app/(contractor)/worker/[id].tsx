@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BalanceCard } from '@/components/balance-card';
 import { LedgerRow } from '@/components/ledger-row';
+import { EditWorkerModal } from '@/components/edit-worker-modal';
 import { ErrorState, LoadingState } from '@/components/load-state';
 import { StatementButton } from '@/components/statement-button';
 import { ThemedText } from '@/components/themed-text';
@@ -39,6 +40,7 @@ export default function WorkerDetailScreen() {
   } = useStore();
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   // The id of the entry whose delete is in flight, so only that row dims.
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const worker = workers.find((candidate) => candidate.id === workerId);
@@ -257,6 +259,15 @@ export default function WorkerDetailScreen() {
                 {removeError}
               </ThemedText>
             ) : null}
+            {/* Above the destructive control, because correcting a record is
+                the far more common intent and should not sit below the one
+                that removes it. */}
+            <Button
+              title="Edit details"
+              variant="secondary"
+              disabled={!isOnline}
+              onPress={() => setEditing(true)}
+            />
             <Button
               title="Remove worker"
               variant="destructive"
@@ -279,6 +290,17 @@ export default function WorkerDetailScreen() {
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
+      {/* Keyed on the worker so the form re-seeds from the saved record after
+          a save, rather than holding the values that were typed. */}
+      {worker ? (
+        <EditWorkerModal
+          key={`${worker.id}-${worker.name}-${worker.daily_wage}`}
+          worker={worker}
+          visible={editing}
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
+
       <View style={styles.bar}>
         <Pressable
           accessibilityRole="button"

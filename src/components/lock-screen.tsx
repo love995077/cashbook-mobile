@@ -34,7 +34,7 @@ export function LockScreen() {
           />
         </View>
 
-        <ThemedText type="smallBold">Cashbook is locked</ThemedText>
+        <ThemedText type="smallBold">MoneyMate is locked</ThemedText>
         <ThemedText type="small" themeColor="textSecondary" style={styles.message}>
           {user ? `Unlock with ${method} to see ${user.name}'s books.` : `Unlock with ${method}.`}
         </ThemedText>

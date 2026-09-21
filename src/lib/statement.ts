@@ -35,6 +35,6 @@ export async function downloadStatement(request: StatementRequest): Promise<Down
     params: { start_date: request.startDate, end_date: request.endDate },
     filename: buildFilename(request.workerName, request.endDate),
     format: 'pdf',
-    title: `${request.workerName} - cashbook statement`,
+    title: `${request.workerName} - MoneyMate statement`,
   });
 }

@@ -70,7 +70,7 @@ export function VoiceEntryButton({ workerId }: { workerId?: number | null }) {
     if (!permission.granted) {
       notify(
         'Microphone needed',
-        'Allow microphone access in Settings to record cashbook entries by voice.'
+        'Allow microphone access in Settings to record MoneyMate entries by voice.'
       );
       return;
     }
@@ -147,7 +147,7 @@ export function VoiceEntryButton({ workerId }: { workerId?: number | null }) {
     <View style={styles.wrap}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Press and hold to speak a cashbook entry"
+        accessibilityLabel="Press and hold to speak a MoneyMate entry"
         accessibilityState={{ busy, disabled: busy }}
         disabled={busy}
         onPressIn={() => void startRecording()}

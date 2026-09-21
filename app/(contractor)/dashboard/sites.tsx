@@ -112,10 +112,21 @@ export default function SitesScreen() {
     setSubmitting(true);
     setFormError(null);
     try {
-      await addSite({ name: trimmed, address: address.trim() || null });
+      const created = await addSite({ name: trimmed, address: address.trim() || null });
       setName('');
       setAddress('');
       setAdding(false);
+      // Straight into the new site rather than back to the list.
+      //
+      // A site is created in order to do something with it - post the crew,
+      // assign a supervisor, take the first photo - and every one of those
+      // lives on the site's own panel. Landing back on the list meant finding
+      // the row you just made and tapping it, which is a step that exists
+      // only because the screen did not move.
+      router.push({
+        pathname: '/(contractor)/site/[id]',
+        params: { id: String(created.id) },
+      });
     } catch (caught) {
       // Stay open — a 409 on a duplicate name is the common one here.
       setFormError((caught as Error).message);

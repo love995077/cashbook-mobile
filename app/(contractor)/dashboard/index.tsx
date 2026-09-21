@@ -89,7 +89,7 @@ function AdminHome() {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
         <ScreenHeader title="Home" />
-        <LoadingState label="Loading your cashbook..." />
+        <LoadingState label="Loading your books..." />
       </SafeAreaView>
     );
   }

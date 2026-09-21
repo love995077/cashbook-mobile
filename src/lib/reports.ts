@@ -150,7 +150,7 @@ export function reportFilename(owner: string, kind: string, format: ReportFormat
     owner
       .split(/[^A-Za-z0-9]+/)
       .filter(Boolean)
-      .join('-') || 'cashbook';
+      .join('-') || 'moneymate';
   const stamp = new Date().toISOString().slice(0, 10);
   return `${safe}-${kind}-${stamp}.${format}`;
 }

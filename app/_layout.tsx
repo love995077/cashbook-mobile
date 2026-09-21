@@ -1,11 +1,12 @@
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { AppLockProvider, useAppLock } from '@/auth/app-lock';
 import { AuthProvider, useAuth } from '@/auth/auth-context';
 import { LockScreen } from '@/components/lock-screen';
+import { AnimatedSplash } from '@/components/splash-screen';
 import { StoreProvider } from '@/data/store';
 import { LanguageProvider } from '@/i18n/language-context';
 import { ThemeProvider, useThemeMode } from '@/theme/theme-context';
@@ -66,26 +67,47 @@ function Themed() {
 function RootNavigator() {
   const { isRestoring, user } = useAuth();
   const { locked } = useAppLock();
+  /**
+   * Whether the opening animation has finished (or been tapped away).
+   *
+   * Deliberately NOT gated on `isRestoring`. The two run side by side: the
+   * session lookup is already in flight while the mark is drawing, so the
+   * animation costs nothing it was not already waiting for. Chaining them
+   * would add its full length to every cold start.
+   */
+  const [introDone, setIntroDone] = useState(false);
+  const finishIntro = useCallback(() => setIntroDone(true), []);
 
   useEffect(() => {
     if (!isRestoring) SplashScreen.hideAsync();
   }, [isRestoring]);
 
-  // Splash is still up; mounting the navigator now would render a route we may
-  // immediately redirect away from.
+  // Expo's own splash is still up; mounting the navigator now would render a
+  // route we may immediately redirect away from.
   if (isRestoring) return null;
 
   // The lock covers a signed-in session only. Someone at the login screen has
   // nothing to hide yet, and locking there would strand a user whose biometrics
   // stopped working with no way to reach the password field.
-  if (locked && user) return <LockScreen />;
+  const content =
+    locked && user ? (
+      <LockScreen />
+    ) : (
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(worker)" />
+        <Stack.Screen name="(contractor)" />
+      </Stack>
+    );
 
+  // The animation sits OVER the mounted app rather than instead of it, so the
+  // dashboard behind it is laid out and painted before the black clears -
+  // there is no second blank frame between the two.
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-      <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(worker)" />
-      <Stack.Screen name="(contractor)" />
-    </Stack>
+    <>
+      {content}
+      {introDone ? null : <AnimatedSplash onDone={finishIntro} />}
+    </>
   );
 }

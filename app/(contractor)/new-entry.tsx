@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AudioNoteButton } from '@/components/audio-note-button';
+import { DatePicker } from '@/components/date-picker';
 import { PaymentModePicker } from '@/components/payment-mode-picker';
 import { ThemedText } from '@/components/themed-text';
 import { TradeBadge } from '@/components/trade-badge';
@@ -70,6 +71,15 @@ export default function NewEntryScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const today = useMemo(() => toISODate(new Date()), []);
+  /**
+   * The day this advance or attendance is recorded against.
+   *
+   * Was always `today`, with no way to say otherwise. An advance handed over
+   * on site on Saturday and entered on Monday landed on Monday, which puts
+   * the money in the wrong week of every report - and the API has always
+   * taken an arbitrary `date`, so only the form was insisting.
+   */
+  const [date, setDate] = useState(today);
   const worker = workers.find((candidate) => candidate.id === workerId) ?? null;
   const alreadyMarked = worker ? getAttendanceOn(worker.id, today) : undefined;
 
@@ -126,7 +136,7 @@ export default function NewEntryScreen() {
         await giveAdvance({
           worker_id: worker.id,
           amount: value,
-          date: today,
+          date,
           payment_mode: paymentMode,
           audio_note_path: audioNotePath,
           note: note.trim() || null,
@@ -135,7 +145,7 @@ export default function NewEntryScreen() {
       } else {
         await markAttendance({
           worker_id: worker.id,
-          date: today,
+          date,
           status,
           note: note.trim() || null,
         });
@@ -222,6 +232,9 @@ export default function NewEntryScreen() {
 
             {action === 'advance' ? (
               <>
+                {/* Back-dating, the same control the attendance grid uses. */}
+                <DatePicker value={date} onChange={setDate} label="Date" />
+
                 <Field
                   label="Amount"
                   value={amount}

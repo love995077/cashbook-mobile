@@ -119,7 +119,7 @@ export function UserManualModal({
             ]}>
             <View style={styles.titleBar}>
               <View style={styles.titleText}>
-                <ThemedText type="smallBold">How to use Cashbook</ThemedText>
+                <ThemedText type="smallBold">How to use MoneyMate</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   The three things worth knowing before you start.
                 </ThemedText>

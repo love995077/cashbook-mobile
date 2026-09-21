@@ -619,6 +619,50 @@ export async function createWorker(
  * from the keys actually present rather than dropping nulls the way the
  * create call does.
  */
+/**
+ * Save the whole of a worker's edit form.
+ *
+ * PUT, not PATCH: an absent field here means "empty", which is the only way
+ * the form can CLEAR a day rate typed by mistake rather than merely overwrite
+ * it. `updateWorker` below stays for the app's one-field writes - posting to
+ * a site, deactivating - where "leave everything else alone" is what is
+ * meant.
+ *
+ * Days already worked keep the rate they were worked at; changing the wage
+ * here is not a rewrite of the books.
+ */
+export async function replaceWorker(
+  token: string,
+  workerId: number,
+  details: {
+    name: string;
+    daily_wage?: number | null;
+    trade?: WorkerTrade | null;
+    wage_type?: WageType;
+    site_id?: number | null;
+    is_active?: boolean;
+  }
+): Promise<User> {
+  const wire = await request<WireUser>(`/contractor/workers/${workerId}`, {
+    method: 'PUT',
+    token,
+    body: {
+      name: details.name.trim(),
+      // Serialised as a string like every other money field on the wire, and
+      // null when there is no rate rather than 0 - which would be a real
+      // wage of nothing.
+      daily_wage:
+        details.daily_wage == null ? null : details.daily_wage.toFixed(2),
+      trade: details.trade ?? null,
+      wage_type: details.wage_type ?? 'daily',
+      // 0 is the API's "not posted anywhere"; null would fail its ge=0 check.
+      site_id: details.site_id ?? 0,
+      is_active: details.is_active ?? true,
+    },
+  });
+  return toUser(wire);
+}
+
 export async function updateWorker(
   token: string,
   workerId: number,
@@ -1158,53 +1202,19 @@ export async function fetchSitePhotos(
   );
 }
 
-/**
- * Upload one progress photo.
+/*
+ * REMOVED: uploadSitePhoto / uploadMySitePhoto / deleteSitePhoto.
  *
- * The file part is built by `appendFile`, which streams off disk on native and
- * reads the picker's blob: URL back on web — the browser's FormData would
- * otherwise stringify the `{ uri, name, type }` object into a text field and
- * the route would answer 422 for an `image` that is not an UploadFile.
- */
-export async function uploadSitePhoto(
-  token: string,
-  siteId: number,
-  photo: { uri: string; name?: string; mimeType?: string },
-  fields: { date?: string; description?: string | null } = {}
-): Promise<SitePhoto> {
-  const form = new FormData();
-  await appendFile(form, 'image', photo, { name: 'photo.jpg', type: 'image/jpeg' });
-
-  if (fields.date) form.append('date', fields.date);
-  if (fields.description) form.append('description', fields.description);
-
-  return request<SitePhoto>(`/contractor/sites/${siteId}/photos`, {
-    method: 'POST',
-    token,
-    body: form,
-  });
-}
-
-/**
- * A worker posting a photo to the site they are posted to.
+ * Site photos are stored on the device that took them and are never sent to
+ * the server - see src/offline/local-photos.ts. These were left behind with
+ * no callers after that change, and a dead upload helper is exactly the thing
+ * a later edit reaches for by accident, so it is gone rather than deprecated.
  *
- * No site id anywhere in the call — the server reads it off the worker's own
- * record, so there is no parameter to tamper with and a worker cannot post to
- * a site they are not on. 409 when they are posted nowhere.
+ * The routes still exist server-side and `fetchSitePhotos` / `fetchMySitePhotos`
+ * still read them, so photos uploaded before the change remain visible.
  */
-export async function uploadMySitePhoto(
-  token: string,
-  photo: { uri: string; name?: string; mimeType?: string },
-  fields: { date?: string; description?: string | null } = {}
-): Promise<SitePhoto> {
-  const form = new FormData();
-  await appendFile(form, 'image', photo, { name: 'photo.jpg', type: 'image/jpeg' });
 
-  if (fields.date) form.append('date', fields.date);
-  if (fields.description) form.append('description', fields.description);
 
-  return request<SitePhoto>('/worker/site-photos', { method: 'POST', token, body: form });
-}
 
 /** The feed for the site this worker is posted to. Empty when they are not. */
 export async function fetchMySitePhotos(
@@ -1214,16 +1224,6 @@ export async function fetchMySitePhotos(
   return request<SitePhoto[]>('/worker/site-photos', { token, signal });
 }
 
-export async function deleteSitePhoto(
-  token: string,
-  siteId: number,
-  photoId: number
-): Promise<void> {
-  await request<void>(`/contractor/sites/${siteId}/photos/${photoId}`, {
-    method: 'DELETE',
-    token,
-  });
-}
 
 /** Mark every active worker on a site as rained out for the day. */
 export async function markSiteRainedOut(

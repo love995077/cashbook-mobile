@@ -124,7 +124,7 @@ export function AppLockProvider({ children }: { children: ReactNode }) {
     if (prompting.current) return false;
     prompting.current = true;
     try {
-      const result = await prompt('Unlock Cashbook');
+      const result = await prompt('Unlock MoneyMate');
       if (result.success) {
         setLocked(false);
         backgroundedAt.current = null;
