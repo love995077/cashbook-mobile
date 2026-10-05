@@ -76,8 +76,10 @@ import {
   fetchPieceRateLogs,
   fetchSiteInventory,
   fetchSites,
+  fetchSiteOverviews,
   fetchSupervisors,
   fetchSummary,
+  fetchWageAudit,
   fetchTools,
   fetchWorkerLedger,
   fetchWorkers,
@@ -96,6 +98,8 @@ import {
   updateCategory,
   updateDeduction as updateDeductionRequest,
   updateSite as updateSiteRequest,
+  reactivateWorker as reactivateWorkerRequest,
+  reconcileWages as reconcileWagesRequest,
   replaceWorker as replaceWorkerRequest,
   updateWorker as updateWorkerRequest,
   type WorkerLedger,
@@ -132,13 +136,17 @@ import type {
   PettyCashTotals,
   PieceRateLog,
   RainOutResult,
+  ReconcileReport,
   Site,
   SiteInventoryItem,
+  SiteOverview,
   SitePhoto,
   Tool,
   ToolAssignment,
   User,
+  WageAudit,
   WageType,
+  WorkerSaveResult,
   WorkerTrade,
   WorkShift,
 } from '@/data/types';
@@ -147,6 +155,7 @@ import { flushQueue } from '@/offline/flush';
 import {
   clearQueue,
   enqueue,
+  makeClientRef,
   readQueue,
   replaceQueue,
   type QueuedItem,
@@ -164,6 +173,13 @@ type StoreValue = {
 
   /** The jobs this contractor is running. Empty for a signed-in worker. */
   sites: Site[];
+
+  /**
+   * Every site's card for the admin's site-selection Home: crew, today's
+   * marks, what is owed and what it has cost. Empty for a supervisor - the
+   * cards are money, which the role does not see - and for a worker.
+   */
+  siteOverviews: SiteOverview[];
 
   /**
    * Tools still checked out, across every site. Null until the first load.
@@ -210,6 +226,8 @@ type StoreValue = {
      * note on the implementation.
      */
     daily_deduction?: number | null;
+    /** The site this money belongs to. Omitted: where the worker is posted. */
+    site_id?: number | null;
   }) => Promise<void>;
   markAttendance: (input: {
     worker_id: number;
@@ -217,13 +235,50 @@ type StoreValue = {
     status: AttendanceStatus;
     shift?: WorkShift;
     note?: string | null;
+    /** Where the day was worked. Omitted: where the worker is posted. */
+    site_id?: number | null;
   }) => Promise<void>;
 
   /** Mark a worker present from a QR scan. Idempotent server-side. */
   scanAttendance: (workerId: number) => Promise<Attendance>;
 
-  /** Take a worker off the crew. Deactivates; the ledger survives. */
-  removeWorker: (workerId: number, options?: { purge?: boolean }) => Promise<void>;
+  /**
+   * Take a worker off the crew. Deactivates; the ledger survives and the
+   * worker stays on their site's books. `lastDay` (ISO date, default today) is
+   * the last day they may still be marked for.
+   */
+  removeWorker: (
+    workerId: number,
+    options?: { purge?: boolean; lastDay?: string }
+  ) => Promise<void>;
+
+  /** Put a deactivated worker back on the crew. Needs a connection. */
+  reactivateWorker: (workerId: number) => Promise<void>;
+
+  /**
+   * The crew, fetched for one screen rather than held here: deactivated
+   * workers, or one site's people. The store itself keeps only the active crew.
+   */
+  getWorkers: (
+    options?: { includeInactive?: boolean; siteId?: number },
+    signal?: AbortSignal
+  ) => Promise<User[]>;
+
+  /**
+   * One worker's ledger, fetched directly. The store loads ledgers for the
+   * active crew only, so a deactivated worker's screen asks for its own.
+   */
+  getWorkerLedger: (workerId: number, signal?: AbortSignal) => Promise<WorkerLedger>;
+
+  /** One site's money: the cash-box figures narrowed to what happened there. */
+  getSiteSummary: (siteId: number, signal?: AbortSignal) => Promise<CashSummary>;
+  /** One site's expenses and receipts, newest first. */
+  getSiteCashEntries: (siteId: number, signal?: AbortSignal) => Promise<CashEntry[]>;
+
+  /** Does the ledger match the register? Admin only. */
+  getWageAudit: (signal?: AbortSignal) => Promise<WageAudit>;
+  /** Bring the ledger in line - `apply: false` only reports what would change. */
+  reconcileWages: (apply: boolean) => Promise<ReconcileReport>;
 
   /** Undo a mistyped wage, advance or payment. Needs a connection. */
   deleteTransaction: (transactionId: number) => Promise<void>;
@@ -464,8 +519,10 @@ type StoreValue = {
       wage_type?: WageType;
       site_id?: number | null;
       is_active?: boolean;
+      /** Move days already marked onto the new rate. Off by default. */
+      reprice_existing?: boolean;
     }
-  ) => Promise<User>;
+  ) => Promise<WorkerSaveResult>;
 
   /**
    * NOTE there is no photo upload in this store any more.
@@ -498,6 +555,8 @@ type StoreValue = {
     amount: number;
     date: string;
     note?: string | null;
+    /** The site it was spent at or received for. */
+    site_id?: number | null;
   }) => Promise<void>;
   removeCashEntry: (entryId: number) => Promise<void>;
 
@@ -521,6 +580,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [ledgers, setLedgers] = useState<Map<number, WorkerLedger>>(new Map());
   const [myLedger, setMyLedger] = useState<WorkerLedger | null>(null);
   const [sites, setSites] = useState<Site[]>([]);
+  const [siteOverviews, setSiteOverviews] = useState<SiteOverview[]>([]);
   const [outstandingTools, setOutstandingTools] = useState<OutstandingTools | null>(null);
   const [summary, setSummary] = useState<CashSummary | null>(null);
   const [categories, setCategories] = useState<CashCategory[]>([]);
@@ -544,6 +604,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setLedgers(new Map());
     setMyLedger(null);
     setSites([]);
+    setSiteOverviews([]);
     setOutstandingTools(null);
     setSummary(null);
     setCategories([]);
@@ -633,6 +694,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
           setWorkers(withoutBalances);
           setSites(freshSites);
+          setSiteOverviews([]);
           setOutstandingTools(freshTools);
           setLedgers(new Map());
           setSummary(null);
@@ -645,6 +707,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             summary: null,
             categories: [],
             cashEntries: [],
+            sites: freshSites,
+            siteOverviews: [],
           });
         } else if (canRunSites(user.role)) {
           // The cash box does not depend on the crew, so it goes out at the
@@ -661,6 +725,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               // The dashboard's end-of-shift tool badge. One small request,
               // in the same wave rather than after it.
               fetchOutstandingTools(token, controller.signal),
+              // Home IS the site list, so its cards go out in the same wave.
+              fetchSiteOverviews(token, controller.signal),
             ]),
           ]);
           const crewLedgers = await Promise.all(
@@ -668,8 +734,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           );
           if (controller.signal.aborted) return;
 
-          const [freshSummary, freshCategories, freshEntries, freshSites, freshTools] =
-            cashBox;
+          const [
+            freshSummary,
+            freshCategories,
+            freshEntries,
+            freshSites,
+            freshTools,
+            freshOverviews,
+          ] = cashBox;
           const withBalances = crew.map((worker, index) => ({
             ...worker,
             balance: crewLedgers[index].balance,
@@ -680,6 +752,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setCategories(freshCategories);
           setCashEntries(freshEntries);
           setSites(freshSites);
+          setSiteOverviews(freshOverviews);
           setOutstandingTools(freshTools);
           await writeCache(user.id, {
             workers: withBalances,
@@ -688,6 +761,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             summary: freshSummary,
             categories: freshCategories,
             cashEntries: freshEntries,
+            sites: freshSites,
+            siteOverviews: freshOverviews,
           });
         } else {
           const ledger = await fetchMyLedger(token, controller.signal);
@@ -700,6 +775,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             summary: null,
             categories: [],
             cashEntries: [],
+            sites: [],
+            siteOverviews: [],
           });
         }
 
@@ -748,6 +825,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSummary(cached.summary);
         setCategories(cached.categories);
         setCashEntries(cached.cashEntries);
+        // A site-first Home with no connection still shows the jobs.
+        setSites(cached.sites);
+        setSiteOverviews(cached.siteOverviews);
         setCachedAt(cached.cachedAt);
         // Something is on screen, so the network round trip is no longer
         // blocking — drop the spinner now.
@@ -808,8 +888,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           shift: queued.payload.shift ?? 'day',
           note: queued.payload.note ?? null,
           // Nothing has reached the server yet, so there is nothing to know
-          // about a site, a dispute or a recording.
-          site_id: null,
+          // about a rate, a dispute or a recording - only the site it was
+          // marked for, if the screen said.
+          site_id: queued.payload.site_id ?? null,
+          wage_rate: null,
           is_disputed: false,
           audio_note_url: null,
         } satisfies Attendance;
@@ -838,21 +920,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const writeOrQueue = useCallback(
     async (
       item: Parameters<typeof enqueue>[1],
-      send: (token: string) => Promise<unknown>
+      send: (token: string, clientRef: string) => Promise<unknown>
     ): Promise<void> => {
       const { token: authToken, userId } = requireSession();
+      // Minted BEFORE the first attempt and reused by the queue. A request
+      // that reached the server, committed, and lost its response to a weak
+      // signal is queued and replayed under the SAME key, so the server
+      // returns the row it already has instead of writing a second one. A
+      // fresh key per attempt would have made that replay a second advance.
+      const clientRef = makeClientRef();
 
       if (!isOnline) {
-        setPending(await enqueue(userId, item));
+        setPending(await enqueue(userId, item, clientRef));
         return;
       }
 
       try {
-        await send(authToken);
+        await send(authToken, clientRef);
       } catch (caught) {
-        // Went offline between the check and the request.
+        // Went offline between the check and the request - or the reply did.
         if (caught instanceof ApiError && caught.isNetworkError) {
-          setPending(await enqueue(userId, item));
+          setPending(await enqueue(userId, item, clientRef));
           return;
         }
         throw caught;
@@ -881,6 +969,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       audio_note_path?: string | null;
       note?: string | null;
       daily_deduction?: number | null;
+      site_id?: number | null;
     }) => {
       const payload = { ...input, type: 'advance' as const };
 
@@ -898,8 +987,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      await writeOrQueue({ kind: 'transaction', payload }, (authToken) =>
-        createTransaction(authToken, payload)
+      await writeOrQueue({ kind: 'transaction', payload }, (authToken, clientRef) =>
+        createTransaction(authToken, { ...payload, client_ref: clientRef })
       );
     },
     [writeOrQueue, requireSession, isOnline, load]
@@ -912,6 +1001,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       status: AttendanceStatus;
       shift?: WorkShift;
       note?: string | null;
+      site_id?: number | null;
     }) => {
       await writeOrQueue({ kind: 'attendance', payload: input }, (authToken) =>
         createAttendance(authToken, input)
@@ -940,10 +1030,70 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    * believes is gone - the one state worse than an error.
    */
   const removeWorker = useCallback(
-    async (workerId: number, options: { purge?: boolean } = {}) => {
+    async (workerId: number, options: { purge?: boolean; lastDay?: string } = {}) => {
       const { token: authToken } = requireSession();
       await deleteWorkerRequest(authToken, workerId, options);
       await load('refresh');
+    },
+    [requireSession, load]
+  );
+
+  const reactivateWorker = useCallback(
+    async (workerId: number) => {
+      const { token: authToken } = requireSession();
+      await reactivateWorkerRequest(authToken, workerId);
+      await load('refresh');
+    },
+    [requireSession, load]
+  );
+
+  const getWorkers = useCallback(
+    async (options: { includeInactive?: boolean; siteId?: number } = {}, signal?: AbortSignal) => {
+      const { token: authToken } = requireSession();
+      return fetchWorkers(authToken, signal, options);
+    },
+    [requireSession]
+  );
+
+  const getWorkerLedger = useCallback(
+    async (workerId: number, signal?: AbortSignal) => {
+      const { token: authToken } = requireSession();
+      return fetchWorkerLedger(authToken, workerId, signal);
+    },
+    [requireSession]
+  );
+
+  const getSiteSummary = useCallback(
+    async (siteId: number, signal?: AbortSignal) => {
+      const { token: authToken } = requireSession();
+      return fetchSummary(authToken, signal, { siteId });
+    },
+    [requireSession]
+  );
+
+  const getSiteCashEntries = useCallback(
+    async (siteId: number, signal?: AbortSignal) => {
+      const { token: authToken } = requireSession();
+      return fetchCashEntries(authToken, { siteId, limit: CASH_ENTRY_LIMIT }, signal);
+    },
+    [requireSession]
+  );
+
+  const getWageAudit = useCallback(
+    async (signal?: AbortSignal) => {
+      const { token: authToken } = requireSession();
+      return fetchWageAudit(authToken, signal);
+    },
+    [requireSession]
+  );
+
+  const reconcileWages = useCallback(
+    async (apply: boolean) => {
+      const { token: authToken } = requireSession();
+      const report = await reconcileWagesRequest(authToken, apply);
+      // Applying moves balances everywhere; a dry run moves nothing.
+      if (apply) await load('refresh');
+      return report;
     },
     [requireSession, load]
   );
@@ -1119,6 +1269,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         wage_type?: WageType;
         site_id?: number | null;
         is_active?: boolean;
+        reprice_existing?: boolean;
       }
     ) => {
       const { token: authToken } = requireSession();
@@ -1275,12 +1426,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       amount: number;
       date: string;
       note?: string | null;
+      site_id?: number | null;
     }) => {
-      await writeOrQueue({ kind: 'cash', payload: input }, (authToken) =>
-        // No clientRef on the online path: the entry is only queued if the
-        // request never left the device, and the queue supplies its own key
-        // when it later replays.
-        createCashEntry(authToken, input)
+      await writeOrQueue({ kind: 'cash', payload: input }, (authToken, clientRef) =>
+        // The same key the queue would replay under, so a reply lost to a
+        // weak signal cannot become a second expense.
+        createCashEntry(authToken, { ...input, client_ref: clientRef })
       );
     },
     [writeOrQueue]
@@ -1730,6 +1881,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       workers,
       myLedger,
       sites,
+      siteOverviews,
       summary,
       categories,
       cashEntries,
@@ -1751,6 +1903,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addWorker,
       scanAttendance,
       removeWorker,
+      reactivateWorker,
+      getWorkers,
+      getWorkerLedger,
+      getSiteSummary,
+      getSiteCashEntries,
+      getWageAudit,
+      reconcileWages,
       deleteTransaction,
       getAdvanceRequests,
       getMyAdvanceRequests,
@@ -1810,6 +1969,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       workers,
       myLedger,
       sites,
+      siteOverviews,
       summary,
       categories,
       cashEntries,
@@ -1831,6 +1991,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addWorker,
       scanAttendance,
       removeWorker,
+      reactivateWorker,
+      getWorkers,
+      getWorkerLedger,
+      getSiteSummary,
+      getSiteCashEntries,
+      getWageAudit,
+      reconcileWages,
       deleteTransaction,
       getAdvanceRequests,
       getMyAdvanceRequests,

@@ -59,7 +59,16 @@ const WAGE_TYPES: { value: WageType; label: string }[] = [
 const MIN_PASSWORD = 6;
 const MAX_PASSWORD = 72;
 
-export function AddWorkerModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+export function AddWorkerModal({
+  visible,
+  onClose,
+  defaultSiteId = null,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  /** Opened from a site: the new worker is posted there unless changed. */
+  defaultSiteId?: number | null;
+}) {
   const theme = useTheme();
   const { addWorker, sites, isOnline } = useStore();
 
@@ -70,7 +79,7 @@ export function AddWorkerModal({ visible, onClose }: { visible: boolean; onClose
   // Daily is the default and the overwhelming majority; piece-rate is for
   // finishing trades engaged by output rather than by the day.
   const [wageType, setWageType] = useState<WageType>('daily');
-  const [siteId, setSiteId] = useState<number | null>(null);
+  const [siteId, setSiteId] = useState<number | null>(defaultSiteId);
   const [password, setPassword] = useState('');
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +90,7 @@ export function AddWorkerModal({ visible, onClose }: { visible: boolean; onClose
     setPhone('');
     setWage('');
     setTrade(null);
-    setSiteId(null);
+    setSiteId(defaultSiteId);
     setPassword('');
     setReveal(false);
     setError(null);

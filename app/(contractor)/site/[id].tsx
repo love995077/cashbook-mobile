@@ -1,14 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError } from '@/api/client';
+import { AddWorkerModal } from '@/components/add-worker-modal';
+import { DeactivatedCrew } from '@/components/deactivated-crew';
 import { ErrorState } from '@/components/load-state';
 import { MachineryTab } from '@/components/machinery-tab';
-import { PettyCashTab } from '@/components/petty-cash-tab';
 import { SiteStock } from '@/components/receive-material';
+import { ReportsPanel } from '@/components/reports-panel';
+import { SiteExpenses, SiteLabourMoney } from '@/components/site-money';
 import { SiteGallery } from '@/components/site-gallery';
 import { SupervisorCard } from '@/components/supervisor-card';
 import { ThemedText } from '@/components/themed-text';
@@ -20,23 +23,38 @@ import { useStore } from '@/data/store';
 import { isAdmin } from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
 import { confirm, notify } from '@/lib/dialog';
-import { ATTENDANCE_GLYPHS, ATTENDANCE_LABELS, formatDate, toISODate } from '@/lib/money';
+import {
+  ATTENDANCE_GLYPHS,
+  ATTENDANCE_LABELS,
+  CURRENCY,
+  formatDate,
+  formatMoney,
+  toISODate,
+} from '@/lib/money';
 
-type Tab = 'crew' | 'cash' | 'stock' | 'machinery';
+type Tab = 'crew' | 'cash' | 'reports' | 'stock' | 'machinery';
 
 /**
- * Petty cash is admin only. It is the site's share of the contractor's cash
- * box, and `GET /contractor/sites/{id}/petty-cash` refuses a supervisor —
- * so the tab is not offered to one rather than being offered and failing.
+ * SITE-FIRST: once a site is open, its Labour, its Expenses and its Reports
+ * are this site's alone - every figure is fetched with `site_id`, and money
+ * follows the site stamped on each row, so a worker moved away or deactivated
+ * still counts here for the days they worked here.
+ *
+ * Expenses and Reports are admin only. They are the site's share of the
+ * contractor's money, which a supervisor does not see - the API refuses them
+ * the summary, the cash entries, the petty cash and the reports - so the tabs
+ * are not offered rather than offered and failing.
  */
 const ADMIN_TABS: { value: Tab; label: string }[] = [
-  { value: 'crew', label: 'Crew' },
-  { value: 'cash', label: 'Petty cash' },
+  { value: 'crew', label: 'Labour' },
+  { value: 'cash', label: 'Expenses' },
+  { value: 'reports', label: 'Reports' },
   { value: 'stock', label: 'Stock' },
   { value: 'machinery', label: 'Plant' },
 ];
 
-const SUPERVISOR_TABS = ADMIN_TABS.filter((tab) => tab.value !== 'cash');
+const MONEY_TABS: Tab[] = ['cash', 'reports'];
+const SUPERVISOR_TABS = ADMIN_TABS.filter((tab) => !MONEY_TABS.includes(tab.value));
 
 /** Only the tabs a deep link may open, so `?tab=cash` cannot slip past. */
 function openingTab(wanted: string | undefined, allowed: Tab[]): Tab {
@@ -93,7 +111,18 @@ export default function SiteDetailScreen() {
   const [showAssign, setShowAssign] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [addingWorker, setAddingWorker] = useState(false);
   const [today] = useState(() => toISODate(new Date()));
+
+  // Bumped whenever the screen comes back into view - from the attendance
+  // grid, an expense, a worker's ledger - so the site's money is re-read
+  // rather than shown as it was before the change.
+  const [version, setVersion] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setVersion((current) => current + 1);
+    }, [])
+  );
 
   // The store holds every worker; this screen only wants the ones posted here.
   const crew = workers.filter((worker) => worker.site_id === siteId);
@@ -224,6 +253,13 @@ export default function SiteDetailScreen() {
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
+      {admin ? (
+        <AddWorkerModal
+          visible={addingWorker}
+          onClose={() => setAddingWorker(false)}
+          defaultSiteId={siteId}
+        />
+      ) : null}
       <View style={styles.bar}>
         <Pressable
           accessibilityRole="button"
@@ -231,7 +267,7 @@ export default function SiteDetailScreen() {
           hitSlop={12}
           style={({ pressed }) => pressed && { opacity: 0.6 }}>
           <ThemedText type="smallBold" style={{ color: theme.tint }}>
-            ‹ {admin ? 'Sites' : 'My site'}
+            ‹ {admin ? 'All sites' : 'My site'}
           </ThemedText>
         </Pressable>
 
@@ -301,8 +337,28 @@ export default function SiteDetailScreen() {
           )}
         </Pressable>
 
+        {tab === 'crew' && admin ? <SiteLabourMoney siteId={siteId} version={version} /> : null}
+
         {tab === 'crew' ? (
           <View style={styles.actions}>
+            <Button
+              title="Mark attendance"
+              disabled={crew.length === 0}
+              onPress={() =>
+                router.push({
+                  pathname: '/(contractor)/dashboard/attendance',
+                  params: { siteId: String(siteId) },
+                })
+              }
+            />
+            {admin ? (
+              <Button
+                title="+ Add worker to this site"
+                variant="secondary"
+                disabled={!isOnline}
+                onPress={() => setAddingWorker(true)}
+              />
+            ) : null}
             <Button
               title={raining ? 'Marking…' : '🌧  Mark rain-out'}
               variant="secondary"
@@ -358,15 +414,45 @@ export default function SiteDetailScreen() {
                     }[mark.status]
                   : theme.textSecondary;
 
+                const owed = worker.balance.balance;
                 return (
                   <View key={worker.id} style={styles.crewRow}>
-                    <Avatar name={worker.name} size={36} />
-                    <View style={styles.crewBody}>
-                      <ThemedText type="smallBold" numberOfLines={1}>
-                        {worker.name}
-                      </ThemedText>
-                      <TradeBadge trade={worker.trade} />
-                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${worker.name}'s ledger`}
+                      // A supervisor has no ledger to open - it is money.
+                      disabled={!admin}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(contractor)/worker/[id]',
+                          params: { id: String(worker.id) },
+                        })
+                      }
+                      style={({ pressed }) => [styles.crewWho, pressed && { opacity: 0.6 }]}>
+                      <Avatar name={worker.name} size={36} />
+                      <View style={styles.crewBody}>
+                        <ThemedText type="smallBold" numberOfLines={1}>
+                          {worker.name}
+                        </ThemedText>
+                        {admin ? (
+                          <ThemedText
+                            type="small"
+                            numberOfLines={1}
+                            style={{ color: owed > 0 ? theme.warning : theme.textSecondary }}>
+                            {owed > 0
+                              ? `Owed ${CURRENCY}${formatMoney(owed)}`
+                              : owed < 0
+                                ? `${CURRENCY}${formatMoney(-owed)} ahead`
+                                : 'Settled'}
+                            {worker.wage_type === 'daily' && !worker.daily_wage
+                              ? ' · no day rate set'
+                              : ''}
+                          </ThemedText>
+                        ) : (
+                          <TradeBadge trade={worker.trade} />
+                        )}
+                      </View>
+                    </Pressable>
                     <View style={[styles.mark, { backgroundColor: `${tint}1F` }]}>
                       <ThemedText type="small" style={{ color: tint, fontWeight: '700' }}>
                         {mark ? ATTENDANCE_GLYPHS[mark.status] : '—'}
@@ -436,6 +522,8 @@ export default function SiteDetailScreen() {
             ) : null}
           </Card>
 
+            <DeactivatedCrew siteId={siteId} admin={admin} />
+
             {/* Admin only: a supervisor may run a site, but not choose which
                 site they run. */}
             {admin && site ? <SupervisorCard site={site} /> : null}
@@ -443,7 +531,9 @@ export default function SiteDetailScreen() {
             <SiteGallery siteId={siteId} />
           </>
         ) : tab === 'cash' ? (
-          <PettyCashTab siteId={siteId} />
+          <SiteExpenses siteId={siteId} version={version} />
+        ) : tab === 'reports' ? (
+          <ReportsPanel siteId={siteId} siteName={site?.name} />
         ) : tab === 'machinery' ? (
           <MachineryTab siteId={siteId} />
         ) : (
@@ -494,6 +584,12 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   crewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two + 2,
+  },
+  crewWho: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two + 2,

@@ -42,7 +42,9 @@ export async function flushQueue(token: string, items: QueuedItem[]): Promise<Fl
         // safe to repeat however the previous attempt ended.
         await createCashEntry(token, { ...attempted.payload, client_ref: attempted.clientRef });
       } else {
-        await createTransaction(token, attempted.payload);
+        // clientRef is the server's idempotency key here too, so replaying an
+        // advance whose first attempt landed returns that advance, not a second.
+        await createTransaction(token, { ...attempted.payload, client_ref: attempted.clientRef });
       }
       synced += 1;
       continue;

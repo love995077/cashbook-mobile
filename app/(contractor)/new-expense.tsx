@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -49,7 +49,16 @@ const DIRECTIONS: { value: CashDirection; label: string }[] = [
 export default function NewExpenseScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { categories, addCashEntry, isOnline } = useStore();
+  const { categories, addCashEntry, isOnline, sites } = useStore();
+  // Opened from a site's Expenses tab, the entry is filed under that site -
+  // which is what puts it in the site's spending and its report.
+  const params = useLocalSearchParams<{ siteId?: string }>();
+  const openSites = useMemo(() => sites.filter((site) => site.is_active), [sites]);
+  const [siteId, setSiteId] = useState<number | null>(() => {
+    if (params.siteId) return Number(params.siteId);
+    // One job: it is obviously that one.
+    return openSites.length === 1 ? openSites[0].id : null;
+  });
 
   const [direction, setDirection] = useState<CashDirection>('out');
   const [categoryId, setCategoryId] = useState<number | null>(null);
@@ -97,6 +106,7 @@ export default function NewExpenseScreen() {
         amount: value,
         date,
         note: note.trim() || null,
+        site_id: siteId,
       });
     } catch (caught) {
       setSubmitting(false);
@@ -134,6 +144,24 @@ export default function NewExpenseScreen() {
               setCategoryId(null);
             }}
           />
+
+          {openSites.length > 0 ? (
+            <View style={styles.siteBlock}>
+              <ThemedText type="smallBold" themeColor="textSecondary">
+                Site
+              </ThemedText>
+              {/* String-valued, so ids round-trip as strings and '' is the
+                  business itself - an expense that belongs to no one job. */}
+              <Segmented
+                options={[
+                  ...openSites.map((site) => ({ value: String(site.id), label: site.name })),
+                  { value: '', label: 'No site' },
+                ]}
+                value={siteId == null ? '' : String(siteId)}
+                onChange={(next) => setSiteId(next ? Number(next) : null)}
+              />
+            </View>
+          ) : null}
 
           <View style={styles.section}>
             <View style={styles.sectionHead}>
@@ -263,6 +291,9 @@ export default function NewExpenseScreen() {
 }
 
 const styles = StyleSheet.create({
+  siteBlock: {
+    gap: Spacing.two,
+  },
   screen: {
     flex: 1,
   },

@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,9 +6,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BarChart, type ChartSeries } from '@/components/bar-chart';
 import { ErrorState, LoadingState } from '@/components/load-state';
 import { ScreenHeader } from '@/components/screen-header';
+import { StatCard } from '@/components/stat-card';
 import { ThemedText } from '@/components/themed-text';
 import { Card, EmptyState, Segmented } from '@/components/ui-kit';
 import { BottomTabInset, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { useStore } from '@/data/store';
 import { useAnalytics } from '@/data/use-analytics';
 import type { AnalyticsPeriod } from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
@@ -41,6 +43,11 @@ export default function AnalyticsScreen() {
   const [period, setPeriod] = useState<AnalyticsPeriod>('week');
   const [selected, setSelected] = useState<number | null>(null);
   const { series, loading, refreshing, error, isStale, refresh } = useAnalytics(period);
+  // The whole business's cash box, all time. It lived on Home until Home
+  // became the site list; the breakdown below is where it was always
+  // explained, so this is where it lives now.
+  const { summary } = useStore();
+  const router = useRouter();
 
   // Memoised so the chart below does not rebuild on every render: the
   // `?? []` would otherwise be a new array each time.
@@ -104,6 +111,52 @@ export default function AnalyticsScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={theme.tint} />
         }>
+        {summary ? (
+          <>
+            <StatCard
+              label="Cash in hand - all sites"
+              amount={summary.balance}
+              icon="wallet-outline"
+              tone={summary.balance >= 0 ? theme.tint : theme.negative}
+              caption={
+                summary.balance >= 0
+                  ? 'Cash received, less everything paid out, across every site.'
+                  : 'You have paid out more than you have received.'
+              }
+              emphasis
+            />
+            <View style={styles.pair}>
+              <StatCard
+                label="Cash in"
+                amount={summary.cash_in}
+                icon="arrow-down-circle-outline"
+                tone={theme.positive}
+              />
+              <StatCard
+                label="Paid out"
+                amount={summary.total_out}
+                icon="arrow-up-circle-outline"
+                tone={theme.negative}
+                caption={`${CURRENCY}${formatMoney(summary.wages_paid)} to workers`}
+              />
+            </View>
+            <Card style={styles.owed}>
+              <ThemedText type="small" themeColor="textSecondary">
+                Still owed to the crew: {CURRENCY}
+                {formatMoney(summary.outstanding_payable)} across {summary.worker_count}{' '}
+                {summary.worker_count === 1 ? 'worker' : 'workers'}. Not part of the cash in
+                hand above - it has not been paid yet.
+              </ThemedText>
+              <ThemedText
+                type="smallBold"
+                style={{ color: theme.tint }}
+                onPress={() => router.push('/(contractor)/reports')}>
+                Business reports ›
+              </ThemedText>
+            </Card>
+          </>
+        ) : null}
+
         <Segmented
           options={PERIODS}
           value={period}
@@ -292,6 +345,13 @@ function CategoryBar({
 }
 
 const styles = StyleSheet.create({
+  pair: {
+    flexDirection: 'row',
+    gap: Spacing.three,
+  },
+  owed: {
+    gap: Spacing.two,
+  },
   screen: {
     flex: 1,
   },

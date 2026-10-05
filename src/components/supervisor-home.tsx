@@ -177,7 +177,12 @@ export function SupervisorHome() {
                       : 'Everyone is marked for today'
                 }
                 badge={unmarked > 0 ? String(unmarked) : undefined}
-                onPress={() => router.push('/(contractor)/dashboard/attendance')}
+                onPress={() =>
+                  router.push({
+                    pathname: '/(contractor)/dashboard/attendance',
+                    params: { siteId: String(site.id) },
+                  })
+                }
               />
               <Job
                 icon="construct-outline"

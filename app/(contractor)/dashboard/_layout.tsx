@@ -9,9 +9,11 @@ import { useTheme } from '@/hooks/use-theme';
 /**
  * The bottom tabs, which are not the same set for everyone in this area.
  *
- * An ADMIN gets all five: Home, Workers, Sites, Analytics, Settings.
+ * An ADMIN gets four: Home (which is the site list - pick a site, and its
+ * labour, expenses and reports are inside it), Workers, Analytics (the whole
+ * business's cash box) and Settings.
  *
- * A SUPERVISOR gets three — Home, Sites, Settings — and that is the whole of
+ * A SUPERVISOR gets three — Home, My site, Settings — and that is the whole of
  * the role's access control on this side of the wire. Workers and Analytics
  * are hidden rather than removed:
  *
@@ -70,10 +72,14 @@ export default function ContractorTabsLayout() {
           ),
         }}
       />
+      {/* An admin's Home IS the site list (site-first), so a second tab of the
+          same sites would be two doors into one room. A supervisor keeps it
+          as "My site". */}
       <Tabs.Screen
         name="sites"
         options={{
-          title: admin ? 'Sites' : 'My site',
+          title: 'My site',
+          href: admin ? null : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="business-outline" color={color} size={size} />
           ),

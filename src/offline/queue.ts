@@ -14,27 +14,27 @@
  *   a replay comes back 409 and the flusher treats that as "already recorded"
  *   and drops the item. The database is the dedupe.
  *
- *   Transactions are NOT. There is no natural key — two identical advances on
- *   the same day are a legitimate thing to record — so a replay creates a
- *   second row and the worker is charged twice.
+ *   Transactions are SAFE now, and were not. There is no natural key — two
+ *   identical advances on the same day are a legitimate thing to record — so
+ *   a replay used to create a second row and charge the worker twice. Since
+ *   `transactions.client_ref` exists (a nullable UNIQUE column, exactly like
+ *   `cash_entries.client_ref`), `POST /contractor/transactions` returns the
+ *   stored row when a key repeats, so a replay is a no-op no matter how the
+ *   first attempt ended.
  *
- *   Cash entries (general expenses) are SAFE, and are the model for the fix:
- *   `POST /contractor/cash-entries` stores the `clientRef` below in a UNIQUE
- *   column and returns the existing row when it repeats, so a replay is a
- *   no-op no matter how the first attempt ended.
+ *   Cash entries (general expenses) are SAFE, by the same mechanism.
  *
- * The mitigation for transactions is to retry only when the request failed
- * before reaching the server. That covers the common case (airplane mode, no
- * signal) but NOT the ambiguous one: a request that arrived, committed, and
- * whose response was lost to a timeout is indistinguishable from one that
- * never landed.
+ * THE KEY MUST BE THE SAME ON EVERY ATTEMPT
+ * -----------------------------------------
+ * The store mints the `clientRef` BEFORE the first online attempt and hands
+ * the same one to `enqueue` if that attempt fails on the network. The
+ * ambiguous case - a request that arrived, committed, and lost its response
+ * to a timeout - is then replayed under the key the server already has, and
+ * deduplicated. A fresh key per attempt would defeat the whole thing.
  *
- * The same fix belongs on `transactions`: accept the `clientRef` as an
- * idempotency key, store it in a nullable UNIQUE column, and return the
- * existing row instead of inserting when it repeats - exactly what
- * `cash_entries.client_ref` already does. Until then,
- * `TRANSACTION_RETRY_IS_SAFE` stays false and ambiguous transaction failures
- * are surfaced to the user rather than retried silently.
+ * Payroll settlement is still never queued: it is computed from the balance
+ * at the moment it is sent, and replaying it hours later would settle a
+ * different figure.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -50,8 +50,8 @@ import type {
 const QUEUE_VERSION = 1;
 const keyFor = (userId: number) => `cashbook.queue.v${QUEUE_VERSION}.user.${userId}`;
 
-/** Flip to true only once the server deduplicates on clientRef. */
-export const TRANSACTION_RETRY_IS_SAFE = false;
+/** The server deduplicates transactions on clientRef - see the note above. */
+export const TRANSACTION_RETRY_IS_SAFE = true;
 
 /** Cash entries already deduplicate server-side, so a replay is harmless. */
 export const CASH_RETRY_IS_SAFE = true;
@@ -66,6 +66,8 @@ export type QueuedAttendance = {
     // API defaults it to a day shift, same as the column's backfill.
     shift?: WorkShift;
     note?: string | null;
+    /** Where the day was worked. Absent on items queued by older builds. */
+    site_id?: number | null;
   };
 };
 
@@ -79,6 +81,7 @@ export type QueuedTransaction = {
     /** Optional so items queued by an older build still replay. */
     payment_mode?: PaymentMode | null;
     note?: string | null;
+    site_id?: number | null;
   };
 };
 
@@ -90,6 +93,7 @@ export type QueuedCashEntry = {
     amount: number;
     date: string;
     note?: string | null;
+    site_id?: number | null;
   };
 };
 
@@ -131,11 +135,13 @@ async function writeQueue(userId: number, items: QueuedItem[]): Promise<void> {
 
 export async function enqueue(
   userId: number,
-  item: QueuedAttendance | QueuedTransaction | QueuedCashEntry
+  item: QueuedAttendance | QueuedTransaction | QueuedCashEntry,
+  /** The key the first (failed) attempt already used - see the note above. */
+  clientRef: string = makeClientRef()
 ): Promise<QueuedItem[]> {
   const queued: QueuedItem = {
     ...item,
-    clientRef: makeClientRef(),
+    clientRef,
     createdAt: Date.now(),
     attempts: 0,
   };

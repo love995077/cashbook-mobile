@@ -4,61 +4,60 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { CashEntryRow } from '@/components/cash-entry-row';
-import { Fab } from '@/components/fab';
+import { AddSiteForm } from '@/components/add-site-form';
 import { ErrorState, LoadingState } from '@/components/load-state';
 import { ScreenHeader } from '@/components/screen-header';
-import { useGreeting } from '@/i18n/language-context';
-import { StatCard } from '@/components/stat-card';
+import { SiteCard } from '@/components/site-card';
 import { SupervisorHome } from '@/components/supervisor-home';
 import { SyncBanner } from '@/components/sync-banner';
 import { ThemedText } from '@/components/themed-text';
-import { Card, EmptyState } from '@/components/ui-kit';
-import { VoiceEntryButton } from '@/components/voice-entry-button';
+import { EmptyState } from '@/components/ui-kit';
 import { BottomTabInset, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useAuth } from '@/auth/auth-context';
 import { useStore } from '@/data/store';
 import { isAdmin } from '@/data/types';
+import { useGreeting } from '@/i18n/language-context';
 import { useTheme } from '@/hooks/use-theme';
-import { CURRENCY, formatMoney } from '@/lib/money';
+import { formatDate, toISODate } from '@/lib/money';
 
 /**
- * Home: what came in, what went out, and what is left.
+ * Home: pick a site.
  *
- * The three cards are the cash box, not the crew ledger. Money owed to workers
- * is deliberately kept out of the balance - it has not been paid yet, so
- * subtracting it would misstate the cash actually in hand. It gets its own
- * line under the cards instead.
+ * SITE-FIRST
+ * ----------
+ * A contractor runs jobs, and nearly every question they open the app with
+ * is about one of them: is today's crew there, what do I owe the people on
+ * it, what has it cost. So Home is the list of sites and nothing else. Each
+ * card carries those three answers (see `SiteCard`); tapping one opens the
+ * site, where its labour, its expenses and its reports are that site's alone.
+ *
+ * The business-wide cash box - everything in, everything out, across every
+ * site - moved to the Analytics tab, where its breakdown already lived.
  *
  * ADMINS ONLY. A supervisor lands on this same route and gets
- * `SupervisorHome` instead — see the switch at the top of the component and
- * the note in the tabs layout. Every figure below comes from `GET
- * /contractor/summary`, which the API refuses them anyway.
+ * `SupervisorHome`, which is their own site(s) and no money: the cards here
+ * carry what each site owes and costs, and `GET /contractor/sites/overview`
+ * refuses a supervisor anyway.
  */
 export default function HomeScreen() {
   const { user } = useAuth();
 
-  // Before anything else, and before any hook that reads the cash box: a
-  // supervisor has no cash box, and the store never loaded one for them.
+  // Before anything else, and before any hook that reads money: a supervisor
+  // has no cash box, and the store never loaded one for them.
   if (!isAdmin(user?.role)) return <SupervisorHome />;
 
-  return <AdminHome />;
+  return <SitesHome />;
 }
 
-function AdminHome() {
+function SitesHome() {
   const theme = useTheme();
   const router = useRouter();
   const greeting = useGreeting();
-  // Just the count for the header badge. Fetched here rather than held in the
-  // store because Home is the only screen that shows it, and it is one small
-  // request against a list that is almost always empty.
-  const [pendingCount, setPendingCount] = useState(0);
   const { user } = useAuth();
   const {
-    summary,
-    cashEntries,
-    workers,
     sites,
+    siteOverviews,
+    workers,
     outstandingTools,
     loading,
     refreshing,
@@ -66,6 +65,13 @@ function AdminHome() {
     refresh,
     getAdvanceRequests,
   } = useStore();
+
+  // Just the count for the header badge, fetched here rather than held in
+  // the store: Home is the only screen that shows it.
+  const [pendingCount, setPendingCount] = useState(0);
+  const [adding, setAdding] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
+  const [today] = useState(() => toISODate(new Date()));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -80,16 +86,32 @@ function AdminHome() {
     return () => controller.abort();
   }, [getAdvanceRequests]);
 
-  const recent = useMemo(() => cashEntries.slice(0, 6), [cashEntries]);
-  const hasData = summary !== null || workers.length > 0;
-  const balance = summary?.balance ?? 0;
-  const crewSize = summary?.worker_count ?? workers.length;
+  const overviewFor = useMemo(
+    () => new Map(siteOverviews.map((row) => [row.site_id, row])),
+    [siteOverviews]
+  );
+  const open = sites.filter((site) => site.is_active);
+  const closed = sites.filter((site) => !site.is_active);
+
+  // One line across every open site, so the day's state reads before any card.
+  const crewTotal = open.reduce(
+    (sum, site) => sum + (overviewFor.get(site.id)?.crew_active ?? site.worker_count),
+    0
+  );
+  const markedTotal = open.reduce(
+    (sum, site) => sum + (overviewFor.get(site.id)?.marked_today ?? 0),
+    0
+  );
+  // Workers on no site appear on no card - say so, or they are invisible.
+  const unposted = workers.filter((worker) => worker.site_id == null).length;
+
+  const hasData = sites.length > 0 || workers.length > 0;
 
   if (loading && !hasData) {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
-        <ScreenHeader title="Home" />
-        <LoadingState label="Loading your books..." />
+        <ScreenHeader title="Sites" />
+        <LoadingState label="Loading your sites..." />
       </SafeAreaView>
     );
   }
@@ -97,7 +119,7 @@ function AdminHome() {
   if (error && !hasData) {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
-        <ScreenHeader title="Home" />
+        <ScreenHeader title="Sites" />
         <ErrorState message={error} onRetry={refresh} />
       </SafeAreaView>
     );
@@ -106,9 +128,9 @@ function AdminHome() {
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
       <ScreenHeader
-        title="Home"
+        title="Sites"
         greeting={{ name: user?.name ?? 'there', salutation: greeting }}
-        action={{ label: 'Reports', onPress: () => router.push('/(contractor)/reports') }}
+        action={adding ? undefined : { label: '+ Site', onPress: () => setAdding(true) }}
         icons={[
           {
             name: 'qr-code-outline',
@@ -138,73 +160,17 @@ function AdminHome() {
         }>
         <SyncBanner />
 
-        <StatCard
-          label="Current balance"
-          amount={balance}
-          icon="wallet-outline"
-          tone={balance >= 0 ? theme.tint : theme.negative}
-          caption={
-            balance >= 0
-              ? 'Cash received, less everything paid out.'
-              : 'You have paid out more than you have received.'
-          }
-          emphasis
-        />
-
-        {/* Both cards open the same screen, focused differently. Analytics is
-            where these two figures are already broken down — by period, and by
-            category — so a tap on a number goes to what the number is made of
-            rather than to a form that would create another one. The entry
-            points stay in the quick-action strip below, where a tap that
-            starts writing is expected. */}
-        <View style={styles.pair}>
-          <StatCard
-            label="Cash in"
-            amount={summary?.cash_in ?? 0}
-            icon="arrow-down-circle-outline"
-            tone={theme.positive}
-            caption="Site advances and client payments."
-            accessibilityHint="Opens the analytics breakdown of money received"
-            onPress={() =>
-              router.push({
-                pathname: '/(contractor)/dashboard/analytics',
-                params: { focus: 'in' },
-              })
-            }
-          />
-          <StatCard
-            label="Wages / materials paid"
-            amount={summary?.total_out ?? 0}
-            icon="arrow-up-circle-outline"
-            tone={theme.negative}
-            caption={`${CURRENCY}${formatMoney(
-              summary?.wages_paid ?? 0
-            )} to workers, ${CURRENCY}${formatMoney(summary?.expenses_paid ?? 0)} on materials and other costs.`}
-            accessibilityHint="Opens the analytics breakdown of money paid out"
-            onPress={() =>
-              router.push({
-                pathname: '/(contractor)/dashboard/analytics',
-                params: { focus: 'out' },
-              })
-            }
-          />
-        </View>
-
-        <Card style={styles.owed}>
-          <View style={styles.owedRow}>
-            <ThemedText type="small" themeColor="textSecondary">
-              Still owed to the crew
+        {open.length > 0 ? (
+          <View style={styles.todayRow}>
+            <ThemedText type="smallBold" themeColor="textSecondary" style={styles.label}>
+              TODAY · {formatDate(today).toUpperCase()}
             </ThemedText>
-            <ThemedText type="smallBold" style={{ color: theme.warning }}>
-              {CURRENCY}
-              {formatMoney(summary?.outstanding_payable ?? 0)}
+            <ThemedText type="small" themeColor="textSecondary">
+              {markedTotal} of {crewTotal} marked across {open.length}{' '}
+              {open.length === 1 ? 'site' : 'sites'}
             </ThemedText>
           </View>
-          <ThemedText type="small" themeColor="textSecondary">
-            Wages earned but not yet paid, across {crewSize}{' '}
-            {crewSize === 1 ? 'worker' : 'workers'}. Not part of the balance above.
-          </ThemedText>
-        </Card>
+        ) : null}
 
         {error ? (
           <ThemedText type="small" style={{ color: theme.negative }}>
@@ -212,145 +178,106 @@ function AdminHome() {
           </ThemedText>
         ) : null}
 
-        {/* End-of-shift tool warning.
-            Shown only when something has been out since BEFORE today. A drill
-            taken out this morning is not a problem, and a badge that lights up
-            every working day is a badge nobody reads. */}
+        {/* End-of-shift tool warning: only for things out since BEFORE today.
+            A drill taken this morning is not a problem, and a badge that lights
+            up every working day is a badge nobody reads. */}
         {outstandingTools && outstandingTools.overdue_count > 0 ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${outstandingTools.overdue_count} tools not returned`}
             onPress={() => {
               const first = outstandingTools.assignments.find((row) => row.site_id != null);
-              const siteId = first?.site_id ?? sites[0]?.id;
+              const siteId = first?.site_id ?? open[0]?.id;
               if (siteId != null) {
-                router.push({
-                  pathname: '/(contractor)/tools',
-                  params: { siteId: String(siteId) },
-                });
+                router.push({ pathname: '/(contractor)/tools', params: { siteId: String(siteId) } });
               }
             }}
             style={({ pressed }) => [
-              styles.toolWarning,
-              {
-                backgroundColor: `${theme.warning}1A`,
-                borderColor: theme.warning,
-                opacity: pressed ? 0.7 : 1,
-              },
+              styles.banner,
+              { backgroundColor: `${theme.warning}1A`, borderColor: theme.warning },
+              pressed && { opacity: 0.7 },
             ]}>
             <Ionicons name="construct-outline" size={20} color={theme.warning} />
-            <View style={styles.toolWarningBody}>
-              <ThemedText type="smallBold" style={{ color: theme.warning }}>
-                {outstandingTools.overdue_count}{' '}
-                {outstandingTools.overdue_count === 1 ? 'tool has' : 'tools have'} not come back
+            <ThemedText type="smallBold" style={[styles.bannerText, { color: theme.warning }]}>
+              {outstandingTools.overdue_count}{' '}
+              {outstandingTools.overdue_count === 1 ? 'tool has' : 'tools have'} not come back
+            </ThemedText>
+          </Pressable>
+        ) : null}
+
+        {adding ? <AddSiteForm onCancel={() => setAdding(false)} /> : null}
+
+        {open.length === 0 && !adding ? (
+          <EmptyState
+            title="No sites yet"
+            message="Add the job you are running. Its crew, its expenses and its reports all live inside it."
+            action={{ label: '+ Add site', onPress: () => setAdding(true) }}
+          />
+        ) : null}
+
+        {open.map((site) => (
+          <SiteCard
+            key={site.id}
+            site={site}
+            overview={overviewFor.get(site.id)}
+            onPress={() =>
+              router.push({ pathname: '/(contractor)/site/[id]', params: { id: String(site.id) } })
+            }
+          />
+        ))}
+
+        {unposted > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() =>
+              router.push({ pathname: '/(contractor)/dashboard/workers', params: { site: 'none' } })
+            }
+            style={({ pressed }) => [
+              styles.banner,
+              { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+              pressed && { opacity: 0.7 },
+            ]}>
+            <Ionicons name="people-outline" size={20} color={theme.tint} />
+            <View style={styles.bannerText}>
+              <ThemedText type="smallBold">
+                {unposted} {unposted === 1 ? 'worker is' : 'workers are'} not on any site
               </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                {outstandingTools.assignments
-                  .slice(0, 2)
-                  .map((row) => `${row.tool_name} · ${row.worker_name}`)
-                  .join(', ')}
-                {outstandingTools.assignments.length > 2
-                  ? ` and ${outstandingTools.assignments.length - 2} more`
-                  : ''}
+              <ThemedText type="small" themeColor="textSecondary">
+                They appear on no site&apos;s crew. Tap to post them.
               </ThemedText>
             </View>
           </Pressable>
         ) : null}
 
-        <View style={styles.actions}>
-          <QuickAction
-            icon="calendar-outline"
-            label="Attendance"
-            onPress={() => router.push('/(contractor)/dashboard/attendance')}
-          />
-          <QuickAction
-            icon="cash-outline"
-            label="Advance"
-            onPress={() => router.push('/(contractor)/new-entry')}
-          />
-          <QuickAction
-            icon="receipt-outline"
-            label="Expense"
-            onPress={() => router.push('/(contractor)/new-expense')}
-          />
-          <QuickAction
-            icon="bar-chart-outline"
-            label="Analytics"
-            onPress={() => router.push('/(contractor)/dashboard/analytics')}
-          />
-        </View>
-
-        <VoiceEntryButton />
-
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <ThemedText type="smallBold" themeColor="textSecondary" style={styles.sectionLabel}>
-              RECENT EXPENSES
+        {closed.length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowClosed((current) => !current)}
+            hitSlop={8}>
+            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              {showClosed ? 'Hide' : 'Show'} {closed.length} closed{' '}
+              {closed.length === 1 ? 'site' : 'sites'}
             </ThemedText>
-            {cashEntries.length > recent.length ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => router.push('/(contractor)/dashboard/analytics')}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
-                  See all
-                </ThemedText>
-              </Pressable>
-            ) : null}
-          </View>
+          </Pressable>
+        ) : null}
 
-          <Card style={styles.list}>
-            {recent.length === 0 ? (
-              <EmptyState
-                title="Nothing logged yet"
-                message="Tap the + button to record fuel, transport, materials or a site advance."
+        {showClosed
+          ? closed.map((site) => (
+              <SiteCard
+                key={site.id}
+                site={site}
+                overview={overviewFor.get(site.id)}
+                onPress={() =>
+                  router.push({
+                    pathname: '/(contractor)/site/[id]',
+                    params: { id: String(site.id) },
+                  })
+                }
               />
-            ) : (
-              recent.map((entry, index) => (
-                <View key={entry.id}>
-                  {index > 0 ? (
-                    <View style={[styles.separator, { backgroundColor: theme.border }]} />
-                  ) : null}
-                  <CashEntryRow entry={entry} />
-                </View>
-              ))
-            )}
-          </Card>
-        </View>
+            ))
+          : null}
       </ScrollView>
-
-      <Fab onPress={() => router.push('/(contractor)/new-expense')} label="Add an expense" />
     </SafeAreaView>
-  );
-}
-
-/** One tile in the quick-action strip under the cards. */
-function QuickAction({
-  icon,
-  label,
-  onPress,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  onPress: () => void;
-}) {
-  const theme = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.action,
-        {
-          backgroundColor: theme.backgroundElement,
-          borderColor: theme.border,
-          opacity: pressed ? 0.7 : 1,
-        },
-      ]}>
-      <Ionicons name={icon} size={20} color={theme.tint} />
-      <ThemedText type="small" numberOfLines={1}>
-        {label}
-      </ThemedText>
-    </Pressable>
   );
 }
 
@@ -366,20 +293,13 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  pair: {
-    flexDirection: 'row',
-    gap: Spacing.three,
+  todayRow: {
+    gap: 2,
   },
-  owed: {
-    gap: Spacing.one,
-    paddingVertical: Spacing.two + 2,
+  label: {
+    letterSpacing: 0.5,
   },
-  owedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  toolWarning: {
+  banner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
@@ -387,41 +307,8 @@ const styles = StyleSheet.create({
     borderRadius: Radius.medium,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  toolWarningBody: {
+  bannerText: {
     flex: 1,
     gap: 1,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  action: {
-    flex: 1,
-    alignItems: 'center',
-    gap: Spacing.one,
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.one,
-    borderRadius: Radius.medium,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  section: {
-    gap: Spacing.two,
-  },
-  sectionHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  sectionLabel: {
-    letterSpacing: 0.5,
-  },
-  list: {
-    padding: 0,
-    paddingVertical: Spacing.one,
-    overflow: 'hidden',
-  },
-  separator: {
-    height: StyleSheet.hairlineWidth,
-    marginLeft: Spacing.three + 40 + Spacing.three,
   },
 });

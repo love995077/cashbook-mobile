@@ -26,14 +26,27 @@
  *
  * ON THE DAY RATE AND HISTORY
  * ---------------------------
- * Raising a rate does NOT reprice days already worked. Attendance writes its
- * wage as a transaction at the rate of that day, so last month's books keep
- * saying what they actually said. The note under the field says so, because a
- * contractor giving somebody a raise mid-job will otherwise wonder.
+ * Raising a rate does NOT reprice days already worked: each day keeps the rate
+ * it was marked at, so last month's books keep saying what they said. Two
+ * exceptions, both reported after saving:
+ *
+ *   * days marked while the worker had NO rate are priced at the new one -
+ *     they were never priced at anything, and leaving them at zero is how a
+ *     week of work became "owed nothing";
+ *   * "Also apply to days already marked" moves every day onto the new rate -
+ *     the fix for a rate typed wrong (agreed 600, entered 60).
  */
 
 import { useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { TradePicker } from '@/components/trade-picker';
@@ -42,6 +55,7 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useStore, type WorkerWithBalance } from '@/data/store';
 import type { WageType, WorkerTrade } from '@/data/types';
 import { useTheme } from '@/hooks/use-theme';
+import { notify } from '@/lib/dialog';
 import { CURRENCY } from '@/lib/money';
 
 const WAGE_TYPES: { value: WageType; label: string }[] = [
@@ -68,8 +82,13 @@ export function EditWorkerModal({
   const [trade, setTrade] = useState<WorkerTrade | null>(worker.trade ?? null);
   const [wageType, setWageType] = useState<WageType>(worker.wage_type);
   const [siteId, setSiteId] = useState<number | null>(worker.site_id ?? null);
+  const [reprice, setReprice] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const typedRate = Number.parseFloat(wage.trim());
+  const rateChanged =
+    Number.isFinite(typedRate) && typedRate > 0 && typedRate !== (worker.daily_wage ?? null);
 
   async function submit() {
     const trimmed = name.trim();
@@ -94,15 +113,27 @@ export function EditWorkerModal({
     setSaving(true);
     setError(null);
     try {
-      await editWorker(worker.id, {
+      const saved = await editWorker(worker.id, {
         name: trimmed,
         daily_wage: rate,
         trade,
         wage_type: wageType,
         site_id: siteId,
         is_active: worker.is_active,
+        reprice_existing: reprice && rateChanged && wageType === 'daily' && rate != null && rate > 0,
       });
       onClose();
+      // Either count moves the balance; a balance that changes after "save
+      // details" with no word about it is a number people stop trusting.
+      const moved = [
+        saved.daysPriced
+          ? `${saved.daysPriced} ${saved.daysPriced === 1 ? 'day' : 'days'} marked without a rate now earn ${CURRENCY}${typed} a day.`
+          : null,
+        saved.daysRepriced
+          ? `${saved.daysRepriced} ${saved.daysRepriced === 1 ? 'day' : 'days'} already marked moved onto the new rate.`
+          : null,
+      ].filter(Boolean);
+      if (moved.length) notify('Wages updated', moved.join('\n'));
     } catch (caught) {
       // Stay open so the edit is not lost.
       setError((caught as Error).message);
@@ -148,6 +179,36 @@ export function EditWorkerModal({
                 placeholder={`${CURRENCY}0`}
                 hint="Leave blank if it varies. Days already worked keep the rate they were worked at."
               />
+
+              {rateChanged && wageType === 'daily' && worker.daily_wage ? (
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: reprice }}
+                  onPress={() => setReprice((current) => !current)}
+                  style={styles.check}>
+                  <View
+                    style={[
+                      styles.box,
+                      {
+                        borderColor: reprice ? theme.tint : theme.border,
+                        backgroundColor: reprice ? theme.tint : 'transparent',
+                      },
+                    ]}>
+                    {reprice ? (
+                      <ThemedText type="smallBold" style={{ color: theme.onTint }}>
+                        ✓
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                  <View style={styles.checkText}>
+                    <ThemedText type="smallBold">Also apply to days already marked</ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      Only if the old rate was a mistake. A raise should leave past days at the
+                      rate they were worked at.
+                    </ThemedText>
+                  </View>
+                </Pressable>
+              ) : null}
 
               <TradePicker value={trade} onChange={setTrade} />
 
@@ -217,4 +278,15 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.four, gap: Spacing.three },
   form: { gap: Spacing.three },
   block: { gap: Spacing.two },
+  check: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.three },
+  box: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  checkText: { flex: 1, gap: 2 },
 });

@@ -107,6 +107,12 @@ export type User = {
   site_id: number | null;
   contractor_id: number | null;
   is_active: boolean;
+  /**
+   * The first day a deactivated worker no longer works here (ISO date); null
+   * while they are active. Days before it can still be marked - a back-dated
+   * register, a phone catching up - and days from it on cannot.
+   */
+  deactivated_on: string | null;
 };
 
 export type Transaction = {
@@ -121,6 +127,12 @@ export type Transaction = {
   note: string | null;
   /** Playable link for an attached voice note; null when there is none. */
   audio_note_url: string | null;
+  /**
+   * The site this money belongs to, stamped when it was written: where the
+   * day was worked, where the piece work was done, or where the worker was
+   * posted when it was paid. Null when it belongs to no site.
+   */
+  site_id: number | null;
 };
 
 /**
@@ -158,6 +170,12 @@ export type Attendance = {
   shift: WorkShift;
   note: string | null;
   site_id: number | null;
+  /**
+   * The day rate this day is worth, frozen when it was marked. Null when the
+   * worker had no rate yet (the day earns once one is set), 0 when they were
+   * paid by the piece.
+   */
+  wage_rate: number | null;
   /** Raised by the worker when the row does not match the day they worked. */
   is_disputed: boolean;
   /** The worker's spoken explanation of a dispute, if they recorded one. */
@@ -228,6 +246,8 @@ export type CashSummary = {
   /** Still owed to the crew, all time. Not part of `balance` either. */
   outstanding_payable: number;
   worker_count: number;
+  /** The site these figures are for; null for the whole business. */
+  site_id: number | null;
 };
 
 export type AnalyticsPeriod = 'day' | 'week' | 'month';
@@ -333,6 +353,92 @@ export type Site = {
    */
   supervisor_id: number | null;
   supervisor_name: string | null;
+};
+
+/**
+ * One site's card on the site-selection Home screen, from
+ * GET /contractor/sites/overview. Admin only - it is money.
+ *
+ * Money is by the site stamped on each row, so a worker moved elsewhere or
+ * deactivated still counts where they worked. `outstanding_payable` and the
+ * crew counts are about who is posted here now.
+ */
+export type SiteOverview = {
+  site_id: number;
+  crew_active: number;
+  crew_inactive: number;
+  marked_today: number;
+  /** Days worked today: a half day counts half. */
+  worked_today: number;
+  wages_earned: number;
+  wages_paid: number;
+  cash_in: number;
+  expenses_paid: number;
+  petty_cash: number;
+  outstanding_payable: number;
+  /** Wages paid out, expenses and petty cash here since the 1st. */
+  month_spend: number;
+  /** The business day these were counted on. */
+  today: string;
+};
+
+/**
+ * What saving a worker did to days already marked. Both are usually zero;
+ * either one moves the balance, so the app says so.
+ */
+export type WorkerSaveResult = {
+  worker: User;
+  /** Days marked while the worker had no rate, now priced at the new one. */
+  daysPriced: number;
+  /** Days moved onto the new rate because re-pricing was asked for. */
+  daysRepriced: number;
+};
+
+/** One day whose wage disagrees with the day. See app/services/integrity.py. */
+export type WageIssue = {
+  kind:
+    | 'unpriced'
+    | 'missing_wage'
+    | 'wrong_amount'
+    | 'wrong_date'
+    | 'wrong_site'
+    | 'stray_wage'
+    | 'bad_link';
+  attendance_id: number;
+  worker_id: number;
+  worker_name: string;
+  date: string;
+  status: AttendanceStatus;
+  expected: number | null;
+  actual: number | null;
+};
+
+/** Does the ledger match the register? From GET /contractor/integrity/wages. */
+export type WageAudit = {
+  consistent: boolean;
+  counts: Partial<Record<WageIssue['kind'], number>>;
+  issues: WageIssue[];
+};
+
+/** What a reconcile did, or - when `applied` is false - would do. */
+export type ReconcileReport = {
+  applied: boolean;
+  days_priced: number;
+  wages_created: number;
+  wages_adopted: number;
+  wages_corrected: number;
+  wages_removed: number;
+  still_unpriced: number;
+  net_change: number;
+  by_worker: {
+    worker_id: number;
+    worker_name: string;
+    days_priced: number;
+    wages_created: number;
+    wages_adopted: number;
+    still_unpriced: number;
+    net_change: number;
+  }[];
 };
 
 export type SitePhoto = {

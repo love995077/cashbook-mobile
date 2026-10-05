@@ -17,11 +17,16 @@ import type {
   CashCategory,
   CashEntry,
   CashSummary,
+  Site,
+  SiteOverview,
   User,
 } from '@/data/types';
 
 /** Bump when the cached shape changes; older payloads are then ignored. */
-const CACHE_VERSION = 2;
+// 3: sites and their Home cards are cached, and rows carry site_id,
+// wage_rate and deactivated_on. A v2 payload lacks all of them and is
+// discarded rather than half-read.
+const CACHE_VERSION = 3;
 
 const keyFor = (userId: number) => `cashbook.cache.v${CACHE_VERSION}.user.${userId}`;
 
@@ -36,6 +41,8 @@ export type CachedDashboard = {
   summary: CashSummary | null;
   categories: CashCategory[];
   cashEntries: CashEntry[];
+  sites: Site[];
+  siteOverviews: SiteOverview[];
 };
 
 export async function readCache(userId: number): Promise<CachedDashboard | null> {

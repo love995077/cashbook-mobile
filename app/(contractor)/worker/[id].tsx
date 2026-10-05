@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -13,9 +13,17 @@ import { TradeBadge } from '@/components/trade-badge';
 import { Button, EmptyState } from '@/components/ui-kit';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useStore } from '@/data/store';
+import type { WorkerLedger } from '@/api/endpoints';
 import { useTheme } from '@/hooks/use-theme';
 import { confirm, notify } from '@/lib/dialog';
-import { CURRENCY, TRANSACTION_LABELS, formatMoney, formatRelativeDate } from '@/lib/money';
+import {
+  CURRENCY,
+  TRANSACTION_LABELS,
+  formatDate,
+  formatMoney,
+  formatRelativeDate,
+  toISODate,
+} from '@/lib/money';
 
 /**
  * One worker, seen by their contractor: balance, history, and the two things
@@ -35,6 +43,8 @@ export default function WorkerDetailScreen() {
     error,
     refresh,
     removeWorker,
+    reactivateWorker,
+    getWorkerLedger,
     deleteTransaction,
     isOnline,
   } = useStore();
@@ -44,10 +54,52 @@ export default function WorkerDetailScreen() {
   // The id of the entry whose delete is in flight, so only that row dims.
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const worker = workers.find((candidate) => candidate.id === workerId);
-  const ledger = Number.isFinite(workerId) ? getLedger(workerId) : undefined;
+  const stored = Number.isFinite(workerId) ? getLedger(workerId) : undefined;
+
+  // The store loads ledgers for the ACTIVE crew only. A deactivated worker -
+  // opened from the Workers directory or a site's deactivated list, often
+  // because they are still owed money - fetches their own.
+  const [fetched, setFetched] = useState<WorkerLedger | null>(null);
+  const [reactivating, setReactivating] = useState(false);
+  useEffect(() => {
+    if (stored || !Number.isFinite(workerId)) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const ledger = await getWorkerLedger(workerId, controller.signal);
+        if (!controller.signal.aborted) setFetched(ledger);
+      } catch {
+        // Falls through to "Worker not found" below.
+      }
+    })();
+    return () => controller.abort();
+  }, [stored, workerId, getWorkerLedger]);
+  const ledger = stored ?? fetched ?? undefined;
+  const inactive = ledger ? !ledger.worker.is_active : false;
   // What the contractor still owes. Negative means the worker is ahead, and
   // there is nothing to settle.
   const owed = ledger?.balance.balance ?? 0;
+
+  async function confirmReactivate() {
+    const name = ledger?.worker.name ?? 'This worker';
+    const ok = await confirm({
+      title: `Reactivate ${name}?`,
+      message:
+        'They go back on the crew and into the attendance grid of their site. Their ledger ' +
+        'is exactly as it was.',
+      confirmLabel: 'Reactivate',
+    });
+    if (!ok) return;
+    setReactivating(true);
+    try {
+      await reactivateWorker(workerId);
+      setFetched(null);
+    } catch (caught) {
+      notify('Could not reactivate', (caught as Error).message);
+    } finally {
+      setReactivating(false);
+    }
+  }
 
   async function confirmRemove() {
     const name = worker?.name ?? ledger?.worker.name ?? 'This worker';
@@ -62,11 +114,13 @@ export default function WorkerDetailScreen() {
           : '';
 
     const ok = await confirm({
-      title: `Remove ${name}?`,
+      title: `Deactivate ${name}?`,
       message:
-        `${owedLine}They come off your crew and out of the attendance grid. ` +
-        'Their ledger is kept, so past wages and reports stay correct.',
-      confirmLabel: 'Remove',
+        `${owedLine}Today is recorded as their last working day: they leave the ` +
+        'attendance grid, and no day after today can be marked for them. Their ledger ' +
+        'stays, and so do their days and payments in their site’s reports. You can ' +
+        'reactivate them later.',
+      confirmLabel: 'Deactivate',
       cancelLabel: 'Keep on crew',
       destructive: true,
     });
@@ -75,7 +129,7 @@ export default function WorkerDetailScreen() {
     setRemoving(true);
     setRemoveError(null);
     try {
-      await removeWorker(workerId);
+      await removeWorker(workerId, { lastDay: toISODate(new Date()) });
       router.back();
     } catch (caught) {
       const message = (caught as Error).message;
@@ -163,6 +217,25 @@ export default function WorkerDetailScreen() {
         }
         ListHeaderComponent={
           <View style={styles.headerBlock}>
+            {inactive ? (
+              <View
+                style={[
+                  styles.inactive,
+                  { borderColor: theme.warning, backgroundColor: `${theme.warning}1A` },
+                ]}>
+                <ThemedText type="smallBold" style={{ color: theme.warning }}>
+                  Deactivated
+                  {ledger.worker.deactivated_on
+                    ? ` · last day before ${formatDate(ledger.worker.deactivated_on)}`
+                    : ''}
+                </ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Not in any attendance grid. Their ledger and their site’s reports are kept,
+                  and anything still owed can be settled below.
+                </ThemedText>
+              </View>
+            ) : null}
+
             <View style={styles.cardWrap}>
               <BalanceCard balance={ledger.balance} />
             </View>
@@ -262,22 +335,33 @@ export default function WorkerDetailScreen() {
             {/* Above the destructive control, because correcting a record is
                 the far more common intent and should not sit below the one
                 that removes it. */}
-            <Button
-              title="Edit details"
-              variant="secondary"
-              disabled={!isOnline}
-              onPress={() => setEditing(true)}
-            />
-            <Button
-              title="Remove worker"
-              variant="destructive"
-              loading={removing}
-              disabled={!isOnline}
-              onPress={() => void confirmRemove()}
-            />
-            <ThemedText type="small" themeColor="textSecondary" style={styles.dangerNote}>
-              Their ledger is kept. Past wages, statements and reports stay correct.
-            </ThemedText>
+            {inactive ? (
+              <Button
+                title="Reactivate worker"
+                loading={reactivating}
+                disabled={!isOnline}
+                onPress={() => void confirmReactivate()}
+              />
+            ) : (
+              <>
+                <Button
+                  title="Edit details"
+                  variant="secondary"
+                  disabled={!isOnline || !worker}
+                  onPress={() => setEditing(true)}
+                />
+                <Button
+                  title="Deactivate worker"
+                  variant="destructive"
+                  loading={removing}
+                  disabled={!isOnline}
+                  onPress={() => void confirmRemove()}
+                />
+                <ThemedText type="small" themeColor="textSecondary" style={styles.dangerNote}>
+                  Their ledger is kept. Past wages, statements and site reports stay correct.
+                </ThemedText>
+              </>
+            )}
           </View>
         }
       />
@@ -366,6 +450,13 @@ const styles = StyleSheet.create({
   },
   cardWrap: {
     paddingHorizontal: Spacing.three,
+  },
+  inactive: {
+    marginHorizontal: Spacing.three,
+    padding: Spacing.three,
+    gap: Spacing.one,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   actions: {
     paddingHorizontal: Spacing.three,

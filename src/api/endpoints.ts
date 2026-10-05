@@ -57,6 +57,11 @@ import type {
   WageType,
   WorkerTrade,
   WorkShift,
+  ReconcileReport,
+  SiteOverview,
+  WageAudit,
+  WageIssue,
+  WorkerSaveResult,
 } from '@/data/types';
 import { buildLedgerEntries } from '@/lib/ledger';
 import { parseAmount } from '@/lib/money';
@@ -75,8 +80,16 @@ type WireUser = {
   site_id: number | null;
   contractor_id: number | null;
   is_active: boolean;
+  /** Absent from servers older than the column, and from cached rows. */
+  deactivated_on?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** A worker as saved, with what the save did to days already marked. */
+type WireWorkerSaved = WireUser & {
+  days_priced?: number;
+  days_repriced?: number;
 };
 
 type WireTransaction = {
@@ -88,6 +101,7 @@ type WireTransaction = {
   payment_mode: PaymentMode | null;
   note: string | null;
   audio_note_url: string | null;
+  site_id?: number | null;
 };
 
 type WireAttendance = {
@@ -98,6 +112,8 @@ type WireAttendance = {
   shift: WorkShift | null;
   note: string | null;
   site_id: number | null;
+  /** Money as a string, like every DECIMAL; absent from older servers. */
+  wage_rate?: string | null;
   is_disputed: boolean;
   audio_note_url: string | null;
 };
@@ -141,6 +157,15 @@ function toUser(wire: WireUser): User {
     site_id: wire.site_id ?? null,
     contractor_id: wire.contractor_id,
     is_active: wire.is_active,
+    deactivated_on: wire.deactivated_on ?? null,
+  };
+}
+
+function toWorkerSaved(wire: WireWorkerSaved): WorkerSaveResult {
+  return {
+    worker: toUser(wire),
+    daysPriced: wire.days_priced ?? 0,
+    daysRepriced: wire.days_repriced ?? 0,
   };
 }
 
@@ -150,6 +175,7 @@ function toTransaction(wire: WireTransaction): Transaction {
     amount: parseAmount(wire.amount),
     payment_mode: wire.payment_mode ?? null,
     audio_note_url: wire.audio_note_url ?? null,
+    site_id: wire.site_id ?? null,
   };
 }
 
@@ -159,6 +185,8 @@ function toAttendance(wire: WireAttendance): Attendance {
   return {
     ...wire,
     site_id: wire.site_id ?? null,
+    // A string on the wire like every DECIMAL; parsed here, once.
+    wage_rate: wire.wage_rate == null ? null : parseAmount(wire.wage_rate),
     // A cached row written before the column existed was a day shift, which
     // is exactly what the backfill decided for the stored rows too.
     shift: wire.shift ?? 'day',
@@ -271,8 +299,24 @@ export async function fetchMyLedger(token: string, signal?: AbortSignal): Promis
 
 // --- contractor ------------------------------------------------------------
 
-export async function fetchWorkers(token: string, signal?: AbortSignal): Promise<User[]> {
-  const wire = await request<WireUser[]>('/contractor/workers', { token, signal });
+export async function fetchWorkers(
+  token: string,
+  signal?: AbortSignal,
+  options: {
+    /** Deactivated workers too - their ledgers are kept, so they can be opened. */
+    includeInactive?: boolean;
+    /** One site's crew; 0 for the workers posted nowhere. */
+    siteId?: number;
+  } = {}
+): Promise<User[]> {
+  const params = new URLSearchParams();
+  if (options.includeInactive) params.set('include_inactive', 'true');
+  if (options.siteId != null) params.set('site_id', String(options.siteId));
+  const query = params.toString();
+  const wire = await request<WireUser[]>(`/contractor/workers${query ? `?${query}` : ''}`, {
+    token,
+    signal,
+  });
   return wire.map(toUser);
 }
 
@@ -318,6 +362,14 @@ export async function createTransaction(
      * per day worked. Advances only — the API rejects it on anything else.
      */
     daily_deduction?: number | null;
+    /**
+     * The idempotency key. A repeat of a key the server already stored gets
+     * the stored row back instead of a second advance - which is what makes
+     * the offline queue safe to replay money.
+     */
+    client_ref?: string | null;
+    /** The site this money belongs to. Omitted: where the worker is posted. */
+    site_id?: number | null;
   }
 ): Promise<Transaction> {
   const wire = await request<WireTransaction>('/contractor/transactions', {
@@ -335,6 +387,8 @@ export async function createTransaction(
       ...(input.daily_deduction
         ? { daily_deduction: input.daily_deduction.toFixed(2) }
         : {}),
+      ...(input.client_ref ? { client_ref: input.client_ref } : {}),
+      ...(input.site_id ? { site_id: input.site_id } : {}),
       note: input.note ?? null,
     },
   });
@@ -370,12 +424,20 @@ export async function createAttendance(
     status: AttendanceStatus;
     shift?: WorkShift;
     note?: string | null;
+    /** Where the day was worked. Omitted: wherever the worker is posted. */
+    site_id?: number | null;
   }
 ): Promise<Attendance> {
+  const { site_id, ...rest } = input;
   const wire = await request<WireAttendance>('/contractor/attendance', {
     method: 'POST',
     token,
-    body: { ...input, shift: input.shift ?? 'day', note: input.note ?? null },
+    body: {
+      ...rest,
+      shift: input.shift ?? 'day',
+      note: input.note ?? null,
+      ...(site_id ? { site_id } : {}),
+    },
   });
   return toAttendance(wire);
 }
@@ -436,17 +498,24 @@ export async function deleteAttendance(
 /**
  * Take a worker off the crew.
  *
- * Deactivates by default; the row and its whole ledger survive. `purge` hard
- * deletes and the API refuses it once the worker has any history, so it is
- * only ever the undo for a name typed wrong a minute ago.
+ * Deactivates by default; the row and its whole ledger survive, and the
+ * worker stays recorded against their site so its reports keep their days.
+ * `lastDay` is the last day they worked (default: today) - days up to it can
+ * still be marked, days after it are refused by every marking route.
+ *
+ * `purge` hard deletes and the API refuses it once the worker has any
+ * history, so it is only ever the undo for a name typed wrong a minute ago.
  */
 export async function deleteWorker(
   token: string,
   workerId: number,
-  options: { purge?: boolean } = {}
+  options: { purge?: boolean; lastDay?: string } = {}
 ): Promise<void> {
-  const query = options.purge ? '?purge=true' : '';
-  await request<void>(`/contractor/workers/${workerId}${query}`, {
+  const params = new URLSearchParams();
+  if (options.purge) params.set('purge', 'true');
+  if (options.lastDay) params.set('last_day', options.lastDay);
+  const query = params.toString();
+  await request<void>(`/contractor/workers/${workerId}${query ? `?${query}` : ''}`, {
     method: 'DELETE',
     token,
   });
@@ -641,9 +710,14 @@ export async function replaceWorker(
     wage_type?: WageType;
     site_id?: number | null;
     is_active?: boolean;
+    /**
+     * Move days already marked onto the new rate - the fix for a rate typed
+     * wrong. Off by default: a raise is not a rewrite of last month.
+     */
+    reprice_existing?: boolean;
   }
-): Promise<User> {
-  const wire = await request<WireUser>(`/contractor/workers/${workerId}`, {
+): Promise<WorkerSaveResult> {
+  const wire = await request<WireWorkerSaved>(`/contractor/workers/${workerId}`, {
     method: 'PUT',
     token,
     body: {
@@ -658,9 +732,10 @@ export async function replaceWorker(
       // 0 is the API's "not posted anywhere"; null would fail its ge=0 check.
       site_id: details.site_id ?? 0,
       is_active: details.is_active ?? true,
+      reprice_existing: details.reprice_existing ?? false,
     },
   });
-  return toUser(wire);
+  return toWorkerSaved(wire);
 }
 
 export async function updateWorker(
@@ -681,12 +756,17 @@ export async function updateWorker(
   // The API takes 0 as "no site"; null would be dropped by exclude_unset.
   if ('site_id' in changes) body.site_id = changes.site_id ?? 0;
 
-  const wire = await request<WireUser>(`/contractor/workers/${workerId}`, {
+  const wire = await request<WireWorkerSaved>(`/contractor/workers/${workerId}`, {
     method: 'PATCH',
     token,
     body,
   });
   return toUser(wire);
+}
+
+/** Put a deactivated worker back on the crew. Their days can be marked again. */
+export async function reactivateWorker(token: string, workerId: number): Promise<User> {
+  return updateWorker(token, workerId, { is_active: true });
 }
 
 // --- voice entry (Phase 6) -------------------------------------------------
@@ -799,6 +879,7 @@ type WireCashSummary = {
   wages_earned: string;
   outstanding_payable: string;
   worker_count: number;
+  site_id?: number | null;
 };
 
 type WireAnalytics = {
@@ -850,6 +931,7 @@ function toSummary(wire: WireCashSummary): CashSummary {
     wages_earned: parseAmount(wire.wages_earned),
     outstanding_payable: parseAmount(wire.outstanding_payable),
     worker_count: wire.worker_count,
+    site_id: wire.site_id ?? null,
   };
 }
 
@@ -897,10 +979,11 @@ export async function deleteCategory(token: string, categoryId: number): Promise
 
 export async function fetchCashEntries(
   token: string,
-  options: { startDate?: string; endDate?: string; limit?: number } = {},
+  options: { startDate?: string; endDate?: string; limit?: number; siteId?: number } = {},
   signal?: AbortSignal
 ): Promise<CashEntry[]> {
   const params = new URLSearchParams();
+  if (options.siteId != null) params.set('site_id', String(options.siteId));
   if (options.startDate) params.set('start_date', options.startDate);
   if (options.endDate) params.set('end_date', options.endDate);
   if (options.limit) params.set('limit', String(options.limit));
@@ -929,6 +1012,8 @@ export async function createCashEntry(
     date: string;
     note?: string | null;
     client_ref?: string | null;
+    /** The site this was spent at, or received for. */
+    site_id?: number | null;
   }
 ): Promise<CashEntry> {
   const wire = await request<WireCashEntry>('/contractor/cash-entries', {
@@ -942,6 +1027,7 @@ export async function createCashEntry(
       date: input.date,
       note: input.note ?? null,
       ...(input.client_ref ? { client_ref: input.client_ref } : {}),
+      ...(input.site_id ? { site_id: input.site_id } : {}),
     },
   });
   return toCashEntry(wire);
@@ -951,8 +1037,110 @@ export async function deleteCashEntry(token: string, entryId: number): Promise<v
   await request<void>(`/contractor/cash-entries/${entryId}`, { method: 'DELETE', token });
 }
 
-export async function fetchSummary(token: string, signal?: AbortSignal): Promise<CashSummary> {
-  return toSummary(await request<WireCashSummary>('/contractor/summary', { token, signal }));
+export async function fetchSummary(
+  token: string,
+  signal?: AbortSignal,
+  options: { siteId?: number } = {}
+): Promise<CashSummary> {
+  const query = options.siteId != null ? `?site_id=${options.siteId}` : '';
+  return toSummary(
+    await request<WireCashSummary>(`/contractor/summary${query}`, { token, signal })
+  );
+}
+
+// --- sites, as the Home screen sees them -------------------------------------
+
+type WireSiteOverview = {
+  site_id: number;
+  crew_active: number;
+  crew_inactive: number;
+  marked_today: number;
+  worked_today: string;
+  wages_earned: string;
+  wages_paid: string;
+  cash_in: string;
+  expenses_paid: string;
+  petty_cash: string;
+  outstanding_payable: string;
+  month_spend: string;
+  today: string;
+};
+
+/** Every site's card for the site-selection Home screen. Admin only. */
+export async function fetchSiteOverviews(
+  token: string,
+  signal?: AbortSignal,
+  options: { includeInactive?: boolean } = {}
+): Promise<SiteOverview[]> {
+  const query = options.includeInactive ? '?include_inactive=true' : '';
+  const wire = await request<WireSiteOverview[]>(`/contractor/sites/overview${query}`, {
+    token,
+    signal,
+  });
+  return wire.map((row) => ({
+    site_id: row.site_id,
+    crew_active: row.crew_active,
+    crew_inactive: row.crew_inactive,
+    marked_today: row.marked_today,
+    worked_today: parseAmount(row.worked_today),
+    wages_earned: parseAmount(row.wages_earned),
+    wages_paid: parseAmount(row.wages_paid),
+    cash_in: parseAmount(row.cash_in),
+    expenses_paid: parseAmount(row.expenses_paid),
+    petty_cash: parseAmount(row.petty_cash),
+    outstanding_payable: parseAmount(row.outstanding_payable),
+    month_spend: parseAmount(row.month_spend),
+    today: row.today,
+  }));
+}
+
+// --- does the ledger match the register? ---------------------------------------
+
+type WireWageIssue = Omit<WageIssue, 'expected' | 'actual'> & {
+  expected: string | null;
+  actual: string | null;
+};
+
+export async function fetchWageAudit(token: string, signal?: AbortSignal): Promise<WageAudit> {
+  const wire = await request<{
+    consistent: boolean;
+    counts: WageAudit['counts'];
+    issues: WireWageIssue[];
+  }>('/contractor/integrity/wages', { token, signal });
+  return {
+    consistent: wire.consistent,
+    counts: wire.counts,
+    issues: wire.issues.map((issue) => ({
+      ...issue,
+      expected: issue.expected == null ? null : parseAmount(issue.expected),
+      actual: issue.actual == null ? null : parseAmount(issue.actual),
+    })),
+  };
+}
+
+/**
+ * Bring every day's wage in line with the day. `apply: false` reports what
+ * would change and writes nothing - show that first.
+ */
+export async function reconcileWages(
+  token: string,
+  apply: boolean
+): Promise<ReconcileReport> {
+  type Wire = Omit<ReconcileReport, 'net_change' | 'by_worker'> & {
+    net_change: string;
+    by_worker: (Omit<ReconcileReport['by_worker'][number], 'net_change'> & {
+      net_change: string;
+    })[];
+  };
+  const wire = await request<Wire>(`/contractor/integrity/wages/reconcile?apply=${apply}`, {
+    method: 'POST',
+    token,
+  });
+  return {
+    ...wire,
+    net_change: parseAmount(wire.net_change),
+    by_worker: wire.by_worker.map((row) => ({ ...row, net_change: parseAmount(row.net_change) })),
+  };
 }
 
 export async function fetchAnalytics(

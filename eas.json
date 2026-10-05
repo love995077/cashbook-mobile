@@ -30,7 +30,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://cashbook-backend-uofs.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://moneymate.lovee.dpdns.org"
       }
     },
 
@@ -42,7 +42,7 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://cashbook-backend-uofs.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://moneymate.lovee.dpdns.org"
       }
     }
   },

@@ -117,6 +117,13 @@ export default function SettingsScreen() {
               value="PDF, Excel"
               onPress={() => router.push('/(contractor)/reports')}
             />
+            <View style={[styles.divider, { backgroundColor: theme.border }]} />
+            <LinkRow
+              icon="checkmark-done-outline"
+              label="Check the books"
+              value="Wages vs attendance"
+              onPress={() => router.push('/(contractor)/ledger-check')}
+            />
           </Card>
         ) : null}
 

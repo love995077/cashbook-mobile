@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   FlatList,
@@ -112,8 +112,13 @@ type Draft = {
 export default function AttendanceScreen() {
   const theme = useTheme();
   const router = useRouter();
+  // SITE-FIRST: opened from a site, the grid is that site's crew and the day
+  // is recorded against that site. Opened without one (older entry points),
+  // it is the whole crew, as before.
+  const params = useLocalSearchParams<{ siteId?: string }>();
+  const siteId = params.siteId ? Number(params.siteId) : null;
   const {
-    workers,
+    workers: allWorkers,
     sites,
     loading,
     refreshing,
@@ -145,12 +150,19 @@ export default function AttendanceScreen() {
   /** worker id -> what has been entered for them, before submitting. */
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
 
+  const site = siteId != null ? sites.find((candidate) => candidate.id === siteId) : undefined;
+  const workers = useMemo(
+    () =>
+      siteId != null ? allWorkers.filter((worker) => worker.site_id === siteId) : allWorkers,
+    [allWorkers, siteId]
+  );
+
   // Rain-out is a site-wide event, so it needs a site. With exactly one it is
   // unambiguous; with several the contractor is asked which one, because
   // guessing would mark the wrong crew.
-  const sitesWithCrew = sites.filter((site) =>
-    workers.some((worker) => worker.site_id === site.id)
-  );
+  const sitesWithCrew = site
+    ? [site]
+    : sites.filter((candidate) => workers.some((worker) => worker.site_id === candidate.id));
 
   const markedCount = workers.filter((worker) => getAttendanceOn(worker.id, date)).length;
   const hasData = workers.length > 0;
@@ -223,9 +235,10 @@ export default function AttendanceScreen() {
       const result = await submitBulkAttendance({
         marks,
         date,
-        // Only meaningful when the whole crew is on one site; the server
-        // falls back to each worker's own posting for the rest.
-        site_id: sitesWithCrew.length === 1 ? sitesWithCrew[0].id : null,
+        // The site this grid is for. Without one, only meaningful when the
+        // whole crew is on one site; the server falls back to each worker's
+        // own posting for the rest.
+        site_id: siteId ?? (sitesWithCrew.length === 1 ? sitesWithCrew[0].id : null),
       });
       setDrafts({});
 
@@ -497,7 +510,14 @@ export default function AttendanceScreen() {
           <View style={[styles.separator, { backgroundColor: theme.border }]} />
         )}
         ListEmptyComponent={
-          <EmptyState title="No workers yet" message="Add a worker before marking attendance." />
+          <EmptyState
+          title={site ? `Nobody is posted to ${site.name}` : 'No workers yet'}
+          message={
+            site
+              ? 'Post workers to this site from its Labour tab, then mark them here.'
+              : 'Add a worker before marking attendance.'
+          }
+        />
         }
         ListFooterComponent={
           <View style={styles.footer}>
@@ -523,7 +543,7 @@ export default function AttendanceScreen() {
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top']}>
       <ScreenHeader
-        title="Attendance"
+        title={site ? `${site.name} · attendance` : 'Attendance'}
         subtitle={`${formatDate(date)} · ${markedCount} of ${workers.length} marked`}
         onBack={() => router.back()}
       />
@@ -635,6 +655,10 @@ function WorkerRow({
       : isPiece
         ? 'Paid by the piece'
         : 'Not marked yet',
+    // Said out loud: a day marked for a worker with no rate earns nothing
+    // until a rate is set (it is priced then). Silence here is how a week of
+    // work turned into "owed nothing".
+    !isPiece && !worker.daily_wage ? 'No day rate set - earns once one is' : null,
   ]
     .filter(Boolean)
     .join(' · ');

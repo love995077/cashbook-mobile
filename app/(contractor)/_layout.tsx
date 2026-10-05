@@ -38,6 +38,7 @@ export default function ContractorLayout() {
       <Stack.Screen name="deduction/[id]" />
       <Stack.Screen name="reports" />
       <Stack.Screen name="invoices" />
+      <Stack.Screen name="ledger-check" />
       <Stack.Screen
         name="settle/[id]"
         options={{ presentation: 'modal', headerShown: false }}
